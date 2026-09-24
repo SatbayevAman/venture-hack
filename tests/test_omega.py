@@ -505,3 +505,24 @@ def test_n_obs_does_not_depend_on_marks(conn):
     o = db.q1(conn, "SELECT id FROM observations WHERE student_id=? AND kind='error' AND source='auto'", (sid,))["id"]
     review.add(conn, o, "reject")
     assert portrait.build(conn, sid)["n_obs"] == n
+
+
+# ---------------------------------------------------------------- O13. настоящие ученики — без бейджа «синтетические»
+
+def _sidebar_text(at) -> str:
+    return "\n".join(str(e.value) for e in list(at.sidebar.markdown) + list(at.sidebar.caption))
+
+
+def test_synthetic_badge_only_for_synthetic(app_db):
+    real = app_db.execute("INSERT INTO students (alias, class_name) VALUES (?,?)", ("Реальный-1", "9 «Б»")).lastrowid
+    app_db.commit()
+    uid = auth.create_user(app_db, "teacher_9b", "Учитель 9Б", "teacher", "password-9b1", classes=["9 «Б»"])
+    t9 = auth.get_user(app_db, uid)
+    at = run_app("portrait", t9, student_id=real)
+    assert "синтетические" not in _sidebar_text(at) and "вымышленных" not in _sidebar_text(at)
+    assert "синтетические данные" not in _texts(at)
+
+    demo = auth.get_user_by_login(app_db, auth.DEMO_TEACHER)
+    at = run_app("portrait", demo)
+    assert "данные синтетические" in _sidebar_text(at) and "вымышленных" in _sidebar_text(at)
+    assert "синтетические данные" in _texts(at)

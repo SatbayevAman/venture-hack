@@ -189,12 +189,16 @@ with st.sidebar:
             st.caption(L("Сейчас: ", "Қазір: ") + cfg.label())
 
     st.divider()
-    st.markdown('<span class="badge b-syn">' + L("данные синтетические", "синтетикалық деректер") + "</span>",
-                unsafe_allow_html=True)
-    st.caption(L("8 вымышленных учеников × 6 работ. Строки решений сгенерированы, но все выводы "
-                 "в журнал записала настоящая проверка SymPy.",
-                 "8 ойдан шығарылған оқушы × 6 жұмыс. Шешім жолдары генерацияланған, бірақ "
-                 "журналдағы барлық қорытындыны нақты SymPy тексеруі жазды."))
+    # бейдж — только если пользователь видит синтетических учеников (как consent.is_synthetic): настоящий класс не подписываем
+    _syn = {r["student_id"] for r in db.q(conn, "SELECT DISTINCT student_id FROM submissions WHERE source='synthetic'")}
+    _vis = auth.visible_student_ids(conn, user)
+    if _syn and (_vis is None or _syn & _vis):
+        st.markdown('<span class="badge b-syn">' + L("данные синтетические", "синтетикалық деректер") + "</span>",
+                    unsafe_allow_html=True)
+        st.caption(L("8 вымышленных учеников × 6 работ. Строки решений сгенерированы, но все выводы "
+                     "в журнал записала настоящая проверка SymPy.",
+                     "8 ойдан шығарылған оқушы × 6 жұмыс. Шешім жолдары генерацияланған, бірақ "
+                     "журналдағы барлық қорытындыны нақты SymPy тексеруі жазды."))
     if is_admin and st.button(L("↺ Сбросить демо-данные", "↺ Демоны қайта бастау"), use_container_width=True):
         reset_demo()
         st.rerun()
@@ -421,7 +425,8 @@ def page_portrait():
     st.markdown(f'<span class="muted">{esc(p["student"]["class_name"])} · '
                 + L(f"{p['n_works']} работ · {p['n_obs']} наблюдений в журнале",
                     f"{p['n_works']} жұмыс · журналда {p['n_obs']} бақылау")
-                + f"</span> {badge(L('синтетические данные', 'синтетикалық деректер'), 'b-syn')}{live}",
+                + "</span> " + (badge(L("синтетические данные", "синтетикалық деректер"), "b-syn")
+                                if consent.is_synthetic(conn, sid) else "") + live,
                 unsafe_allow_html=True)
 
     d = ss.get("diff")
