@@ -1,6 +1,8 @@
 """Языковая модель — только на входе и на выходе.
 
 * recognize()   — фото тетради → строки (vision-модель);
+  recognize_detailed() — то же, плюс неразборчивые фрагменты каждой строки
+  (уверенность строк считает код: core/ocr.py);
 * tag_comment() — свободный текст учителя → теги СТРОГО из словаря;
 * personalize() — переформулировать готовые советы из словаря под работы.
 
@@ -119,10 +121,21 @@ def _json(text: str):
         raise LLMError(f"Некорректный JSON: {ex}") from ex
 
 
+try:  # фото с iPhone (HEIC) — если установлен необязательный pillow-heif
+    from pillow_heif import register_heif_opener as _register_heif
+    HEIC_OK = True
+except Exception:  # noqa: BLE001
+    _register_heif, HEIC_OK = None, False
+
+PHOTO_TYPES = ["jpg", "jpeg", "png", "webp"] + (["heic", "heif"] if HEIC_OK else [])
+
+
 def prepare_image(data: bytes) -> tuple[bytes, str]:
     """Повернуть по EXIF, уменьшить до 1600 px, JPEG. Фото нигде не сохраняется."""
     try:
         from PIL import Image, ImageOps
+        if _register_heif is not None:
+            _register_heif()
         img = Image.open(io.BytesIO(data))
         img = ImageOps.exif_transpose(img).convert("RGB")
         img.thumbnail((1600, 1600))
@@ -153,20 +166,122 @@ OCR_PROMPT = """На фото — тетрадь ученика с домашн�
 {{"problems": [{{"number": 1, "lines": ["...", "..."]}}, {{"number": 2, "lines": ["..."]}}]}}"""
 
 
-def recognize(cfg: LLMConfig, image_bytes: bytes, problems: list) -> dict:
-    """problems: [(idx, statement)] → {idx: [строки]}"""
+_RULES = """Правила записи:
+- степень: x² или x^2; корень: √; умножение: ·; дробь: a/b (скобки, если нужно); минус: −
+- индексы корней: x₁, x₂
+- без LaTeX: не пиши \\frac, \\sqrt, \\cdot, $ и фигурные скобки
+- слова (Ответ, Проверка, ОДЗ, или, не подходит, Жауабы, Тексеру и т. п.) сохраняй как есть
+- не переписывай условие, если его нет в тетради; не добавляй своих строк; ошибки не исправляй
+- не решай задачу и не дописывай пропущенные шаги
+- если символ неразборчив, поставь в text «?» вместо него, а в unsure — фрагмент строки,
+  в котором сомневаешься (как ты его прочитал); если всё разборчиво — unsure: []"""
+
+OCR_DETAILED_PROMPT = """На фото — тетрадь ученика с домашней работой. Задачи:
+{problems}
+
+Перепиши решение каждой задачи построчно, строка тетради = строка в ответе.
+""" + _RULES + """
+- строки, которые не удалось отнести ни к одной задаче, положи в unassigned
+
+Верни только JSON без пояснений:
+{{"problems": [{{"number": 1, "lines": [{{"text": "x² = 7x", "unsure": []}}]}}], "unassigned": []}}"""
+
+# Второе прочтение (passes=2): другая формулировка, чтобы ошибки прочтений были независимее.
+OCR_SECOND_PROMPT = """Ты видишь фото страницы школьной тетради по алгебре. В ней решены задачи:
+{problems}
+
+Сделай посимвольную расшифровку рукописи: иди по тетради сверху вниз и для каждой задачи выпиши
+каждую рукописную строку ровно так, как она написана, — даже если в ней ошибка.
+Внимательно различай похожие знаки: + и −, x и ×, 1 и 7, 5 и S, 0 и 6, ² и 2, скобки и индексы.
+""" + _RULES + """
+- строки, которые не относятся ни к одной задаче, положи в unassigned
+
+Ответ — только JSON по схеме:
+{{"problems": [{{"number": 1, "lines": [{{"text": "...", "unsure": []}}]}}], "unassigned": [{{"text": "...", "unsure": []}}]}}"""
+
+JSON_REPAIR_PROMPT = """Твой прошлый ответ не удалось разобрать как JSON. Вот он:
+<<<
+{previous}
+>>>
+Верни только JSON по схеме, без пояснений и без markdown:
+{{"problems": [{{"number": 1, "lines": [{{"text": "строка", "unsure": []}}]}}], "unassigned": []}}"""
+
+UNASSIGNED = 0   # ключ для строк, которые модель не отнесла ни к одной задаче (номера задач — с 1)
+
+
+def _json_ocr(text: str) -> dict:
+    """Разобрать ответ распознавания: JSON (возможно, в ```-блоке) с ключом problems."""
+    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S)
+    out = _json(m.group(1) if m else text)
+    if not isinstance(out, dict) or not isinstance(out.get("problems", []), list):
+        raise LLMError("JSON не по схеме: нет списка problems")
+    return out
+
+
+def _line_item(l) -> Optional[dict]:
+    if isinstance(l, dict):
+        text = str(l.get("text") or "").strip()
+        unsure = l.get("unsure") or []
+        if isinstance(unsure, str):
+            unsure = [unsure]
+        unsure = [str(u).strip() for u in unsure if str(u).strip()]
+    else:
+        text, unsure = str(l if l is not None else "").strip(), []
+    return {"text": text, "unsure": unsure} if text else None
+
+
+def _parse_detailed(out: dict) -> dict:
+    res: dict = {}
+    for p in out.get("problems") or []:
+        if not isinstance(p, dict):
+            continue
+        m = re.search(r"\d+", str(p.get("number", "")))
+        if not m:
+            continue
+        lines = [x for x in (_line_item(l) for l in (p.get("lines") or [])) if x]
+        res.setdefault(int(m.group(0)), []).extend(lines)
+    loose = [x for x in (_line_item(l) for l in (out.get("unassigned") or [])) if x]
+    if loose:
+        res.setdefault(UNASSIGNED, []).extend(loose)
+    return res
+
+
+def _read_once(cfg: LLMConfig, prompt: str, image: tuple) -> dict:
+    first = _call(cfg, prompt, image=image, system=OCR_SYSTEM, max_tokens=4000)
+    try:
+        return _parse_detailed(_json_ocr(first))
+    except LLMError:
+        pass
+    # одна попытка починить формат — без фото, только текст прошлого ответа
+    second = _call(cfg, JSON_REPAIR_PROMPT.format(previous=first[:6000]), system=OCR_SYSTEM, max_tokens=4000)
+    try:
+        return _parse_detailed(_json_ocr(second))
+    except LLMError as ex:
+        raise LLMError("Модель дважды вернула ответ не в формате JSON — распознать строки не удалось. "
+                       "Попробуйте ещё раз или введите строки текстом.") from ex
+
+
+def recognize_detailed(cfg: LLMConfig, image_bytes: bytes, problems: list, passes: int = 1) -> dict:
+    """problems: [(idx, statement)] → {idx: [{"text": str, "unsure": [str]}]} — сырой ответ модели.
+
+    Строки без задачи — под ключом UNASSIGNED (0). При passes=2 второй запрос идёт с другой
+    формулировкой, строки выравниваются (ocr.merge_readings); у разошедшихся строк появляется
+    поле alternatives = [первое прочтение, второе]. Уверенность здесь не считается — это ocr.score_lines."""
     data, mime = prepare_image(image_bytes)
     plist = "\n".join(f"№{i}. {st}" for i, st in problems)
-    out = _json(_call(cfg, OCR_PROMPT.format(problems=plist), image=(data, mime), system=OCR_SYSTEM))
-    res = {}
-    for p in out.get("problems", []):
-        try:
-            idx = int(p.get("number"))
-        except (TypeError, ValueError):
-            continue
-        lines = [str(l).strip() for l in p.get("lines", []) if str(l).strip()]
-        res[idx] = lines
+    res = _read_once(cfg, OCR_DETAILED_PROMPT.format(problems=plist), (data, mime))
+    if passes >= 2:
+        from .ocr import merge_readings  # ocr → checker; импорт здесь, чтобы llm оставался лёгким
+        res2 = _read_once(cfg, OCR_SECOND_PROMPT.format(problems=plist), (data, mime))
+        for idx in sorted(set(res) | set(res2)):
+            res[idx] = merge_readings(res.get(idx, []), res2.get(idx, []))
     return res
+
+
+def recognize(cfg: LLMConfig, image_bytes: bytes, problems: list) -> dict:
+    """problems: [(idx, statement)] → {idx: [строки]}"""
+    det = recognize_detailed(cfg, image_bytes, problems)
+    return {idx: [l["text"] for l in lines] for idx, lines in det.items() if idx != UNASSIGNED}
 
 
 def _tag_catalog() -> str:
