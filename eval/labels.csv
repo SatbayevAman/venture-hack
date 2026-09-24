@@ -1,0 +1,5 @@
+photo,kind,statement,lines,error_line,error_tag
+,equation,x² = 5x,x = 5 | Ответ: 5,1,lost_root
+,equation,3x + 5 = x − 3,3x − x = −3 + 5 | 2x = 2 | x = 1,1,sign
+,equation,x² − 5x + 6 = 0,D = 25 − 24 = 1 | x₁ = (5 + 1)/2 = 3 | x₂ = (5 − 1)/2 = 2 | Ответ: 2; 3,0,
+,expression,(a + 3)² − (a − 3)(a + 3),a² + 9 − (a² − 9) | 18,1,fsu
