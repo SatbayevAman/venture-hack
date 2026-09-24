@@ -5,20 +5,25 @@
    — CER — доля посимвольных ошибок по нормализованным строкам;
    — флаги «требует проверки»: сколько строк помечено и сколько из них действительно
      ошибочны; какая доля ошибочных строк попала под флаг (калибровка ocr.UNSURE);
+     строки оцениваются с учётом вида задачи: ocr.score_lines(lines, kind);
    — время распознавания одного фото.
 2. Первая ошибка (строка и тег):
-   — на эталонных строках (качество проверки SymPy),
+   — на эталонных строках (качество проверки SymPy; quality.reference_accuracy — та же функция,
+     что у страницы «Качество»),
    — на распознанных строках (весь путь целиком, цель G2 ≥ 80 %).
 
-Разметка: eval/labels.csv (UTF-8), по строке на задачу:
+Разметка: eval/labels.csv (UTF-8), по строке на задачу; подробно — eval/README.md:
     photo            — путь к фото относительно папки eval/ (можно пусто: тогда только проверка)
     problem          — номер задачи на фото (необязательно, по умолчанию 1): для фото с несколькими задачами
-    kind             — equation | expression
-    statement        — условие, например  x² = 5x
+    kind             — equation | expression | inequality | system | biquadratic (core/kinds, названия — tags.KIND_NAMES)
+    statement        — условие, например  x² = 5x;  у системы уравнения через «;»:  2x + y = 7; x − y = 2
     lines            — эталонные строки решения через « | » (как написано в тетради)
     error_line       — номер первой неверной строки (0, если решение верное)
-    error_tag        — тег ошибки (lost_root, extra_root, sign, fsu, calc, other) или пусто
-    status           — необязательно; draft — черновик из --draft, человек ещё не проверил эталон
+    error_tag        — тег ошибки из tags.TAGS (kind == "error") или пусто: lost_root, extra_root, sign, fsu,
+                       calc, other, ineq_flip, ineq_div_var, interval_choice, boundary, subst, swap_xy,
+                       neg_t, cancel_terms
+    status           — необязательно; draft — черновик из --draft, человек ещё не проверил эталон;
+                       черновики пропускаются в точности и считаются
 
 Запуск:
     python evaluate.py                                   # только проверка на эталонных строках
@@ -26,6 +31,7 @@
     python evaluate.py --ocr --passes 2                  # два прочтения
     python evaluate.py --ocr --out eval/results.md       # таблица для слайда
     python evaluate.py --draft photos/07.jpg --statement "x² = 5x" [--kind equation] [--problem 1]
+    --labels ПУТЬ — другой файл разметки (по умолчанию eval/labels.csv)
 """
 from __future__ import annotations
 
