@@ -1,4 +1,4 @@
-streamlit>=1.40
+streamlit>=1.51        # st.altair_chart(height=…) в разделе «Динамика»; Streamlit 1.51+ требует Python 3.10+
 sympy>=1.12
 pandas>=2.0
 requests>=2.28
