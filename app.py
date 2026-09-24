@@ -1026,7 +1026,8 @@ digraph G { rankdir=LR; node [shape=box, style="rounded,filled", fillcolor="#eef
 
 
 {"class": page_class, "portrait": page_portrait, "check": page_check, "log": page_log,
- "quality": lambda: review_view.render_quality(conn, L, lang, esc, student_ids=auth.visible_student_ids(conn, user)),
+ "quality": lambda: review_view.render_quality(conn, L, lang, esc, student_ids=auth.visible_student_ids(conn, user),
+                                               user=user),
  "manage": lambda: manage_view.render(conn, user, L, lang),
  "practice": lambda: practice_view.render(conn, L, lang, esc, badge, render_lines, students, role=user["role"]),
  "about": page_about}[page]()

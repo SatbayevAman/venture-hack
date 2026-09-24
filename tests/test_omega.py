@@ -558,3 +558,34 @@ def test_evaluate_and_quality_agree_on_drafts(tmp_path, monkeypatch, capsys):
     ok_tag = re.search(r"Первая ошибка \(строка и тег\) на эталонных строках\s+(\d+)/(\d+)", out).groups()
     assert (n, int(ok_line[0]), int(ok_tag[0])) == (q["n"], q["ok_line"], q["ok_tag"])
     assert "пропущено черновиков: 1" in out
+
+
+# ---------------------------------------------------------------- O15. выгрузки «Качества» — в журнал действий
+
+def test_quality_downloads_are_audited(app_db, monkeypatch):
+    import streamlit as st
+    from core import audit
+    assert "export_quality" in audit.ACTIONS and audit.action_name("export_quality", "kk")
+    from streamlit.delta_generator import DeltaGenerator
+    seen = []
+    orig = DeltaGenerator.download_button
+
+    def spy(self, label, data, file_name=None, *a, **k):  # и st.download_button, и кнопки в колонках
+        seen.append((file_name, k.get("on_click"), k.get("args")))
+        return orig(self, label, data, file_name, *a, **k)
+
+    monkeypatch.setattr(DeltaGenerator, "download_button", spy)
+    monkeypatch.setattr(st, "download_button", lambda *a, **k: spy(st._main, *a, **k))
+    o = db.q1(app_db, "SELECT id FROM observations WHERE kind='error' AND source='auto' LIMIT 1")["id"]
+    review.add(app_db, o, "reject", comment="для кандидатов")  # чтобы появилась выгрузка rule_candidates.md
+    teacher = auth.get_user_by_login(app_db, auth.DEMO_TEACHER)
+    run_app("quality", teacher)
+    files = {f: (cb, args) for f, cb, args in seen}
+    assert {"rule_candidates.md", "quality_metrics.md", "quality_metrics.csv"} <= set(files)
+    for f in ("rule_candidates.md", "quality_metrics.md", "quality_metrics.csv"):
+        cb, args = files[f]
+        assert cb is audit.log and args[1:] == (teacher, "export_quality", "export")
+    cb, args = files["rule_candidates.md"]
+    cb(app_db, *args[1:])  # то, что Streamlit вызовет при скачивании
+    last = audit.recent(app_db, 1)[0]
+    assert (last["action"], last["user_id"], last["target_type"]) == ("export_quality", teacher["id"], "export")

@@ -11,7 +11,7 @@ import time
 import pandas as pd
 import streamlit as st
 
-from core import auth, db, quality, review
+from core import audit, auth, db, quality, review
 from core import tags as T
 
 TIMER_RESET = 30 * 60   # «Проверить» позже чем через 30 мин после первого — это уже новая проверка
@@ -234,8 +234,10 @@ def rating_form(conn, p: dict, L, reviewer=None) -> None:
 
 # ---------------------------------------------------------------- страница «Качество»
 
-def render_quality(conn, L, lang: str, esc, student_ids=None) -> None:
-    """student_ids — ученики, видимые пользователю (auth.visible_student_ids); None — все."""
+def render_quality(conn, L, lang: str, esc, student_ids=None, user=None) -> None:
+    """student_ids — ученики, видимые пользователю (auth.visible_student_ids); None — все.
+    user — для журнала действий: каждая выгрузка со страницы пишется как export_quality."""
+    logged = {"on_click": audit.log, "args": (conn, user, "export_quality", "export")}
     st.title(L("Качество выводов", "Қорытындылар сапасы"))
     st.caption(L("Все цифры — только из отметок учителя и замеров в этом приложении, ничего не оценивается «на глаз». "
                  "Отметки ставятся в доказательствах портрета, на экране проверки после записи и в журнале.",
@@ -310,7 +312,7 @@ def render_quality(conn, L, lang: str, esc, student_ids=None) -> None:
                                 f"<code>{esc(x['evidence'])}</code>{note}", unsafe_allow_html=True)
         st.download_button(L("Скачать как markdown", "Markdown ретінде жүктеу"),
                            quality.candidates_markdown(conn, lang, tags, student_ids).encode("utf-8"),
-                           "rule_candidates.md", "text/markdown")
+                           "rule_candidates.md", "text/markdown", **logged)
 
     # ---- 3. размеченные работы
     st.header(L("3. Точность на размеченных работах", "3. Белгіленген жұмыстардағы дәлдік"))
@@ -384,10 +386,10 @@ def render_quality(conn, L, lang: str, esc, student_ids=None) -> None:
         st.markdown(md)
     c1, c2 = st.columns(2)
     c1.download_button(L("Скачать метрики (markdown)", "Метрикаларды жүктеу (markdown)"), md.encode("utf-8"),
-                       "quality_metrics.md", "text/markdown", use_container_width=True)
+                       "quality_metrics.md", "text/markdown", use_container_width=True, **logged)
     c2.download_button(L("Скачать метрики (CSV)", "Метрикаларды жүктеу (CSV)"),
                        quality.metrics_csv(conn, student_ids).encode("utf-8-sig"), "quality_metrics.csv", "text/csv",
-                       use_container_width=True)
+                       use_container_width=True, **logged)
 
 
 def _precision_df(rows, L, lang) -> pd.DataFrame:
