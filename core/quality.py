@@ -49,8 +49,9 @@ def _reviewed(conn, source: str) -> list:
     """Наблюдения источника source с последней отметкой: [(observation, review)]."""
     review.ensure_schema(conn)
     rows = db.q(conn, """SELECT o.*, r.verdict, r.new_tag, r.comment AS review_comment, r.reviewer,
-                                r.created_at AS reviewed_at
+                                r.created_at AS reviewed_at, s.source AS sub_source
                          FROM observations o JOIN reviews r ON r.observation_id = o.id
+                         LEFT JOIN submissions s ON s.id = o.submission_id
                          WHERE o.source=? AND r.id = (SELECT MAX(id) FROM reviews WHERE observation_id = o.id)""",
                 (source,))
     return [dict(r) for r in rows]
@@ -70,7 +71,7 @@ def tag_precision(conn, source: str = "auto") -> list[dict]:
         prec = c["confirm"] / n
         out.append({
             "tag": tag, "kind": T.TAGS.get(tag, {}).get("kind", ""), "observations": totals.get(tag, 0),
-            "reviewed": n, "confirm": c["confirm"], "reject": c["reject"], "retag": c["retag"],
+            "reviewed": n, "synthetic": sum(r["sub_source"] == "synthetic" for r in items), "confirm": c["confirm"], "reject": c["reject"], "retag": c["retag"],
             "precision": prec, "top_replacement": repl[0][0] if repl else None,
             "top_replacement_n": repl[0][1] if repl else 0,
             "needs_review": n >= REVIEWS_MIN and prec < PRECISION_MIN,
@@ -88,7 +89,7 @@ def overall_precision(rows: list[dict]) -> Optional[dict]:
     if not n:
         return None
     ok = sum(d["confirm"] for d in rows)
-    return {"reviewed": n, "confirm": ok, "precision": ok / n}
+    return {"reviewed": n, "confirm": ok, "precision": ok / n, "synthetic": sum(d["synthetic"] for d in rows)}
 
 
 # ---------------------------------------------------------------- кандидаты на исправление правил
@@ -126,7 +127,7 @@ def candidates_markdown(conn, lang: str = "ru", tags: Optional[list] = None) -> 
         head = f"## {T.name(tag, 'ru' if ru else 'kk')} (`{tag}`)"
         if d:
             head += (f" — {'точность' if ru else 'дәлдік'} {round(d['precision'] * 100)} %, "
-                     f"{d['reviewed']} {'отметок' if ru else 'белгі'}")
+                     f"{'отметок' if ru else 'белгі'}: {d['reviewed']}")
         lines += [head, ""]
         for c in (c for c in cases if c["tag"] == tag):
             where = " · ".join(x for x in [
@@ -264,8 +265,11 @@ def metrics_markdown(conn, lang: str = "ru") -> str:
     ov = overall_precision(rows)
     out.append("## " + L("Точность правил по отметкам учителя", "Мұғалім белгілері бойынша ережелер дәлдігі"))
     if ov:
-        out.append(L(f"Всего отмечено {ov['reviewed']} выводов, верных {ov['confirm']} — {round(ov['precision'] * 100)} %.",
-                     f"Барлығы {ov['reviewed']} қорытынды белгіленді, дұрысы {ov['confirm']} — {round(ov['precision'] * 100)} %."))
+        out.append(L(f"Отмечено выводов: {ov['reviewed']}, из них верных: {ov['confirm']} — {round(ov['precision'] * 100)} %.",
+                     f"Белгіленген қорытынды: {ov['reviewed']}, оның дұрысы: {ov['confirm']} — {round(ov['precision'] * 100)} %."))
+        if ov["synthetic"]:
+            out.append(L(f"Из отмеченных на синтетических работах демо: {ov['synthetic']}.",
+                         f"Оның {ov['synthetic']} — демодағы синтетикалық жұмыстарда."))
         out += ["", "| " + L("Тег | Отмечено | Верно | Неверно | Другой тег | Точность | Статус",
                               "Тег | Белгіленді | Дұрыс | Дұрыс емес | Басқа тег | Дәлдік | Күйі") + " |",
                 "|---|---|---|---|---|---|---|"]
@@ -289,8 +293,8 @@ def metrics_markdown(conn, lang: str = "ru") -> str:
     t = timing_summary(conn)
     out.append("## " + L("Время проверки", "Тексеру уақыты"))
     if t["median_seconds"] is not None:
-        line = L(f"Медиана {t['median_seconds']:.0f} с на работу ({t['n']} работ)",
-                 f"Бір жұмысқа медиана {t['median_seconds']:.0f} с ({t['n']} жұмыс)")
+        line = L(f"Медиана {t['median_seconds']:.0f} с на работу (работ: {t['n']})",
+                 f"Бір жұмысқа медиана {t['median_seconds']:.0f} с (жұмыс: {t['n']})")
         if t["manual_minutes"] is not None:
             line += L(f" против {t['manual_minutes']:g} мин вручную (по опросу)",
                       f", қолмен — {t['manual_minutes']:g} мин (сауалнама бойынша)")
@@ -300,6 +304,6 @@ def metrics_markdown(conn, lang: str = "ru") -> str:
     rs = review.rating_summary(conn)
     if rs["mean"] is not None:
         out += ["", "## " + L("Похожесть портрета", "Портреттің ұқсастығы"),
-                L(f"Средняя оценка {rs['mean']:.1f} из 5 ({rs['n_students']} учеников, {rs['n']} оценок).",
-                  f"Орташа баға 5-тен {rs['mean']:.1f} ({rs['n_students']} оқушы, {rs['n']} баға).")]
+                L(f"Средняя оценка {rs['mean']:.1f} из 5 (учеников: {rs['n_students']}, оценок: {rs['n']}).",
+                  f"Орташа баға 5-тен {rs['mean']:.1f} (оқушы: {rs['n_students']}, баға: {rs['n']}).")]
     return "\n".join(out) + "\n"
