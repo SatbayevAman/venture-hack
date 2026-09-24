@@ -467,3 +467,29 @@ def test_demo_button_hw8_finds_aigerim_by_alias(app_db):
     assert "ошибка в строке 3" in text
     for label in ("неравенство", "знаки"):  # O9: подписи видов строк справа
         assert label in text
+
+
+# ---------------------------------------------------------------- O11. способы решения новых тем в портрете
+
+def test_methods_by_skill_new_topics(conn):
+    sid = _aigerim(conn)
+    before = portrait.build(conn, sid)
+    assert set(before["methods_by_skill"]) == {"quadratic"}  # в сиде методы — только у квадратных
+    disc = next(m for m in before["methods_by_skill"]["quadratic"] if m["tag"] == "disc")
+    assert (disc["count"], disc["total"]) == next((m["count"], m["total"]) for m in before["methods"] if m["tag"] == "disc")
+    _live_demo(conn, sid, _hw(conn, 8), seed.EXTRA_DEMO_TEXT[8])
+    p = portrait.build(conn, sid)
+    assert db.q1(conn, "SELECT COUNT(*) c FROM observations WHERE tag='interval_method' AND student_id=?", (sid,))["c"] == 2
+    im = next(m for m in p["methods_by_skill"]["inequality"] if m["tag"] == "interval_method")
+    assert (im["count"], im["total"]) == (1, 1) and len(im["refs"]) == 2
+    assert p["methods"] == before["methods"]  # квадратные — как раньше
+
+
+def test_portrait_pages_show_new_methods(app_db):
+    sid = _aigerim(app_db)
+    _live_demo(app_db, sid, _hw(app_db, 8), seed.EXTRA_DEMO_TEXT[8])
+    teacher = auth.get_user_by_login(app_db, auth.DEMO_TEACHER)
+    at = run_app("portrait", teacher, student_id=sid)
+    assert "Неравенства: какими способами" in _texts(at)
+    student = auth.get_user_by_login(app_db, auth.DEMO_STUDENT)
+    assert "метод интервалов" in _texts(run_app("portrait", student)).lower()

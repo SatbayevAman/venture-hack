@@ -482,6 +482,14 @@ def portrait_teacher(p: dict):
             share = m["count"] / m["total"] if m["total"] else 0
             st.markdown(f'{esc(T.name(m["tag"], lang))} — {esc(portrait.share_text(m["count"], m["total"], lang))}'
                         f'<div class="bar"><div style="width:{share * 100:.0f}%"></div></div>', unsafe_allow_html=True)
+        for sk, ms in p["methods_by_skill"].items():  # новые темы: метод интервалов, подстановка, замена…
+            if sk == "quadratic":
+                continue  # квадратные — выше, вместе со способами без наблюдений
+            st.markdown(f"**{esc(T.skill_name(sk, lang))}: " + L("какими способами", "қандай тәсілмен") + "**")
+            for m in ms:
+                share = m["count"] / m["total"] if m["total"] else 0
+                st.markdown(f'{esc(T.name(m["tag"], lang))} — {esc(portrait.share_text(m["count"], m["total"], lang))}'
+                            f'<div class="bar"><div style="width:{share * 100:.0f}%"></div></div>', unsafe_allow_html=True)
     with c2:
         st.markdown("**" + L("Привычки", "Әдеттер") + "**")
         for h in ("check_done", "skip_steps", "domain_noted", "late"):
@@ -579,9 +587,11 @@ def portrait_student(p: dict):
     good = [f"{T.skill_name(s['skill'], lang)} — " + L(f"без ошибок в {s['clean']} работах из {s['total']}",
                                                        f"{s['clean']}/{s['total']} жұмыста қатесіз")
             for s in p["strengths"]]
-    used = [m for m in p["methods"] if m["count"]]
+    used = [m["tag"] for m in p["methods"] if m["count"]]
+    used += list(dict.fromkeys(m["tag"] for sk, ms in p["methods_by_skill"].items() if sk != "quadratic"
+                               for m in ms if m["tag"] not in used))
     if used:
-        good.append(L("Уверенно пользуешься: ", "Сенімді қолданасың: ") + ", ".join(T.name(m["tag"], lang).lower() for m in used))
+        good.append(L("Уверенно пользуешься: ", "Сенімді қолданасың: ") + ", ".join(T.name(m, lang).lower() for m in used))
     if p["habits"]["check_done"]["count"] >= max(1, p["n_works"] // 2):
         good.append(L("Часто проверяешь ответ — это отличная привычка", "Жауапты жиі тексересің — бұл тамаша әдет"))
     st.markdown("\n".join(f"- ✅ {g}" for g in good) or "—")
