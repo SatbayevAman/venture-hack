@@ -135,7 +135,7 @@ def normalize(raw: str) -> Norm:
     for a, b in (("−", "-"), ("–", "-"), ("—", "-"), ("‒", "-"), ("·", "*"), ("×", "*"),
                  ("∙", "*"), ("⋅", "*"), ("•", "*"), ("÷", "/"), ("²", "^2"), ("³", "^3"),
                  ("₁", "1"), ("₂", "2"), ("＝", "="), ("✓", ""), ("✔", ""), ("✅", ""),
-                 ("**", "^"), ("⁰", "^0"), ("¹", "^1")):
+                 ("**", "^"), ("⁰", "^0"), ("¹", "^1"), ("⁴", "^4")):
         s = s.replace(a, b)
     # метка в начале строки: «Ответ:», «Проверка:», «ОДЗ:»
     s = re.sub(rf"^[\s{CYR}.]+:", " ", s)
@@ -466,8 +466,42 @@ def _division_detail(pL, pR, d_prev, d_cur, var=X) -> dict:
     return {}
 
 
+def _cancel_terms_variants(e: sp.Expr):
+    """Сокращение слагаемых вместо множителей в дробях выражения:
+    (x + 2)/(x + 4) → 2/4 (общее слагаемое вычеркнуто сверху и снизу);
+    (x² + 3x)/x → x² + 3, (5x + 10)/5 → x + 10 (на знаменатель «сокращено»
+    одно слагаемое числителя)."""
+    out = []
+    for node in sp.preorder_traversal(e):
+        if not isinstance(node, (sp.Mul, sp.Pow)):
+            continue
+        try:
+            N, D = (ev(p) for p in sp.fraction(node))  # до вычисления: (5x + 10)/5 не раскрылось
+        except Exception:  # noqa: BLE001
+            continue
+        if D == 1:
+            continue
+        tn, td = _terms(N), _terms(D)
+        shown = _fmt(sp.Mul(N, sp.Pow(D, -1, evaluate=False), evaluate=False))
+        for t in tn:
+            if D.free_symbols and len(tn) > 1 and len(td) > 1 and any(sp.expand(t - s) == 0 for s in td):
+                out.append((node, (N - t) / (D - t), shown))
+        if len(tn) > 1 and len(td) == 1:
+            for t in tn:
+                if sp.gcd(t, D) != 1:
+                    out.append((node, sp.cancel(t / D) + (N - t), shown))
+    return out
+
+
 def classify_expr_step(prev_u: sp.Expr, cur_u: sp.Expr):
     prev, cur = ev(prev_u), ev(cur_u)
+    for node, wrong, shown in _cancel_terms_variants(prev_u):
+        try:
+            wrong_prev = ev(prev_u.xreplace({node: wrong}))
+        except Exception:  # noqa: BLE001
+            continue
+        if expr_equal(wrong_prev, cur):
+            return "cancel_terms", {"f": shown}
     for node, wrong in _fsu_variants(prev_u):
         try:
             wrong_prev = ev(prev_u.xreplace({node: wrong}))
