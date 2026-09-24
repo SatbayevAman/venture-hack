@@ -14,7 +14,7 @@ import json
 import os
 from collections import Counter, defaultdict
 
-from . import db, tags as T
+from . import db, review, tags as T
 
 DECAY = 0.8
 MIN_CASES = 3
@@ -72,18 +72,20 @@ def _skills_per_work(conn, sid: int) -> dict:
 
 
 def _obs(conn, sid: int) -> list:
-    return [dict(r) for r in db.q(conn, """
+    rows = [dict(r) for r in db.q(conn, """
         SELECT o.*, a.number AS work_no, p.idx AS problem_idx, p.statement
         FROM observations o
         LEFT JOIN submissions s ON s.id = o.submission_id
         LEFT JOIN assignments a ON a.id = s.assignment_id
         LEFT JOIN problems p ON p.id = o.problem_id
         WHERE o.student_id=? ORDER BY o.created_at""", (sid,))]
+    return review.apply(conn, rows)  # отметки учителя: «неверно» исключает, «другой тег» заменяет
 
 
 def _ref(o: dict) -> dict:
     return {"sub_id": o["submission_id"], "work_no": o["work_no"], "problem_idx": o["problem_idx"],
-            "line_no": o["line_no"], "evidence": o["evidence"], "statement": o.get("statement")}
+            "line_no": o["line_no"], "evidence": o["evidence"], "statement": o.get("statement"),
+            "obs_id": o["id"]}
 
 
 def _bkt_fields(conn, skill: str, tag: str, skill_works: list, hit: set) -> dict:

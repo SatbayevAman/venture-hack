@@ -18,6 +18,7 @@ from core import ocr, ocr_store
 from core import tags as T
 from core.tags import question_for, tag_comment_keywords
 from ui import dynamics as dynamics_view
+from ui import review as review_view
 
 ROOT = Path(__file__).parent
 DB_PATH = os.environ.get("PORTRET_DB", str(ROOT / "data" / "portret.db"))
@@ -97,7 +98,7 @@ def reset_demo():
 
 if "lang" not in ss:
     ss["lang"] = "ru"
-PAGES = ["class", "portrait", "check", "log", "about"]
+PAGES = ["class", "portrait", "check", "log", "quality", "about"]
 
 lang = ss["lang"]  # значение радиокнопки уже в session_state до её отрисовки
 
@@ -134,6 +135,7 @@ PAGE_NAMES = {
     "portrait": L("👤 Портрет ученика", "👤 Оқушы портреті"),
     "check": L("📷 Проверка работы", "📷 Жұмысты тексеру"),
     "log": L("📒 Журнал наблюдений", "📒 Бақылау журналы"),
+    "quality": L("📈 Качество", "📈 Сапа"),
     "about": L("⚙️ Как это работает", "⚙️ Бұл қалай жұмыс істейді"),
 }
 
@@ -392,6 +394,7 @@ def portrait_teacher(p: dict):
         badges = badge(L("слабое место", "әлсіз тұс"), "b-weak")
         if e["confirmed"]:
             badges += badge(L("подтверждено дважды: работы + учитель", "екі рет расталды: жұмыс + мұғалім"), "b-conf")
+        badges += review_view.precision_badge(conn, e["tag"], L)
         det = f" ({esc(e['detail'])})" if e["detail"] else ""
         st.markdown(f'<div class="card"><h4>{esc(t)} · {esc(T.skill_name(e["skill"], lang).lower())} {badges}</h4>'
                     f'{esc(portrait.share_text(e["count"], e["total"], lang))}{det}. '
@@ -400,6 +403,7 @@ def portrait_teacher(p: dict):
         with st.expander(L(f"Доказательства ({len(e['refs'])}): работа, строка", f"Дәлелдер ({len(e['refs'])}): жұмыс, жол")):
             for r in e["refs"]:
                 show_ref_work(r)
+                review_view.controls(conn, r.get("obs_id"), L, key=f"rv_{p['student']['id']}_{r.get('obs_id')}")
     low = [e for e in p["errors"] if not e["weak"]]
     if low:
         st.markdown("**" + L("Наблюдаем, но выводов пока нет", "Бақылап жүрміз, әзірге қорытынды жоқ") + "**")
@@ -501,6 +505,7 @@ def portrait_teacher(p: dict):
                 st.markdown(f"💬 *{esc(cmt['text'])}*")
 
     dynamics_view.render_section(conn, p, L, lang)
+    review_view.rating_form(conn, p, L)
 
 
 def portrait_student(p: dict):
@@ -696,6 +701,7 @@ def page_check():
         with st.spinner(L("Проверяю шаги…", "Қадамдарды тексеріп жатырмын…")):
             results = pipeline.run_checks(conn, aid, answers)
         ss["check"] = {"sid": sid, "aid": aid, "answers": answers, "results": results, "saved": False}
+        review_view.timer_start(ss, sid, aid)
         ss.pop("diff", None)
 
     chk = ss.get("check")
@@ -743,6 +749,8 @@ def page_check():
                     st.markdown(f"- {L('Выражение', 'Өрнек')}: `{det['f']}`")
                 if res.true_answer is not None:
                     st.markdown(f"- {L('Верный ответ', 'Дұрыс жауап')}: `{'; '.join(f'{v:g}' for v in res.true_answer) or '∅'}`")
+            if not chk["saved"]:
+                review_view.not_error_toggle(aid, pid, L)
 
     st.divider()
     if chk["saved"]:
@@ -752,6 +760,7 @@ def page_check():
                         + "<br>".join(esc(x) for x in d["lines"]) + "</div>", unsafe_allow_html=True)
         else:
             st.success(L("Работа записана в журнал.", "Жұмыс журналға жазылды."))
+        review_view.submission_controls(conn, ss.get("last_sub_id"), L)
         if st.button(L("Открыть портрет →", "Портретті ашу →"), type="primary"):
             go("portrait", sid)
         return
@@ -780,6 +789,8 @@ def page_check():
                 except llm.LLMError:
                     tagged = None
             pipeline.record_comment(conn, sub_id, text, tagged or tag_comment_keywords(text), tagger)
+        review_view.after_record(conn, ss, sub_id, sid, aid, chk, L)  # время проверки и «это не ошибка»
+        ss["last_sub_id"] = sub_id
         after = portrait.snapshot(portrait.build(conn, sid, lang))
         ss["diff"] = {"sid": sid, "lines": portrait.diff(before, after, lang)}
         chk["saved"] = True
@@ -803,7 +814,7 @@ def page_log():
                           format_func=lambda x: {"": L("все", "барлығы"), "error": L("ошибка", "қате"),
                                                  "method": L("метод", "тәсіл"), "habit": L("привычка", "әдет"),
                                                  "teacher": L("из комментария", "пікірден")}[x])
-    sql = """SELECT o.created_at, st.alias, a.number, p.idx, o.line_no, o.kind, o.tag, o.skill, o.evidence,
+    sql = """SELECT o.id, o.created_at, st.alias, a.number, p.idx, o.line_no, o.kind, o.tag, o.skill, o.evidence,
                     o.source, o.confidence FROM observations o JOIN students st ON st.id = o.student_id
              LEFT JOIN submissions s ON s.id = o.submission_id LEFT JOIN assignments a ON a.id = s.assignment_id
              LEFT JOIN problems p ON p.id = o.problem_id WHERE 1=1"""
@@ -816,14 +827,23 @@ def page_log():
         sql += " AND o.kind=?"; args.append(kind)
     sql += " ORDER BY o.created_at DESC"
     rows = db.q(conn, sql, args)
+    marks = review_view.log_marks(conn, [r["id"] for r in rows], L)
     df = pd.DataFrame([{
         L("Время", "Уақыт"): r["created_at"][:16], L("Ученик", "Оқушы"): r["alias"],
         L("Работа", "Жұмыс"): f"№{r['number']}" if r["number"] else "", L("Задача", "Есеп"): str(r["idx"] or ""),
         L("Строка", "Жол"): str(r["line_no"] or ""), L("Вид", "Түрі"): r["kind"], L("Тег", "Тег"): T.name(r["tag"], lang),
+        L("Отметка учителя", "Мұғалім белгісі"): marks.get(r["id"], ""),
         L("Навык", "Дағды"): T.skill_name(r["skill"], lang) if r["skill"] else "",
         L("Доказательство", "Дәлел"): r["evidence"], L("Источник", "Көзі"): r["source"],
         L("Уверенность", "Сенімділік"): r["confidence"]} for r in rows])
-    st.dataframe(df, hide_index=True, use_container_width=True, height=520)
+    sel = st.dataframe(df, hide_index=True, use_container_width=True, height=520,
+                       on_select="rerun", selection_mode="single-row", key=f"log_table_{who}_{src}_{kind}")
+    picked = sel.selection.rows if sel else []
+    if picked and picked[0] < len(rows):
+        review_view.log_controls(conn, rows[picked[0]], L)
+    else:
+        st.caption(L("Выберите строку слева в таблице, чтобы поставить отметку учителя.",
+                     "Мұғалім белгісін қою үшін кестеде жолды сол жағынан таңдаңыз."))
     st.download_button(L("Скачать CSV", "CSV жүктеу"), df.to_csv(index=False).encode("utf-8-sig"),
                        "observations.csv", "text/csv")
 
@@ -903,5 +923,6 @@ digraph G { rankdir=LR; node [shape=box, style="rounded,filled", fillcolor="#eef
                   "нақты жұмыстар — тек келісіммен. Демода барлық оқушы ойдан шығарылған."))
 
 
-{"class": page_class, "portrait": page_portrait, "check": page_check, "log": page_log, "about": page_about}[page]()
+{"class": page_class, "portrait": page_portrait, "check": page_check, "log": page_log,
+ "quality": lambda: review_view.render_quality(conn, L, lang, esc), "about": page_about}[page]()
 ss["_last_lang"] = lang
