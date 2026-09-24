@@ -888,9 +888,10 @@ def page_log():
     c = st.columns(3)
     who = c[0].selectbox(L("Ученик", "Оқушы"), [0] + [s["id"] for s in studs],
                          format_func=lambda i: L("все", "барлығы") if i == 0 else next(s["alias"] for s in studs if s["id"] == i))
-    src = c[1].selectbox(L("Источник", "Көзі"), ["", "auto", "teacher"],
+    src = c[1].selectbox(L("Источник", "Көзі"), ["", "auto", "teacher", "practice"],
                          format_func=lambda x: {"": L("все", "барлығы"), "auto": L("автопроверка", "автотексеру"),
-                                                "teacher": L("учитель", "мұғалім")}[x])
+                                                "teacher": L("учитель", "мұғалім"),
+                                                "practice": L("тренажёр", "жаттықтырғыш")}[x])
     kind = c[2].selectbox(L("Вид", "Түрі"), ["", "error", "method", "habit", "teacher"],
                           format_func=lambda x: {"": L("все", "барлығы"), "error": L("ошибка", "қате"),
                                                  "method": L("метод", "тәсіл"), "habit": L("привычка", "әдет"),

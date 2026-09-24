@@ -300,3 +300,20 @@ def test_marks_from_app_store_user_id(app_db):
     click(at, "✓ верно")
     r = db.q1(app_db, "SELECT reviewer FROM reviews ORDER BY id DESC LIMIT 1")
     assert r["reviewer"] == str(teacher["id"])
+
+
+# ---------------------------------------------------------------- O7. фильтр «тренажёр» в журнале
+
+def test_log_filter_practice(app_db):
+    sid = _aigerim(app_db)
+    item = practice.start_fix_own(app_db, sid, *[db.q1(app_db, """SELECT at.submission_id, at.problem_id FROM attempts at
+        JOIN submissions s ON s.id = at.submission_id WHERE s.student_id=? AND at.first_error_line IS NOT NULL
+        ORDER BY s.submitted_at DESC LIMIT 1""", (sid,))[k] for k in ("submission_id", "problem_id")])
+    practice.abandon_item(app_db, item, 1)  # исход needs_example → журнал, source='practice'
+    teacher = auth.get_user_by_login(app_db, auth.DEMO_TEACHER)
+    at = run_app("log", teacher)
+    box = next(b for b in at.selectbox if b.label == "Источник")
+    assert "тренажёр" in box.options
+    box.select("practice").run()
+    df = at.dataframe[0].value
+    assert len(df) == 1 and set(df["Источник"]) == {"practice"}
