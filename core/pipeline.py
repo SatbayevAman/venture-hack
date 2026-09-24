@@ -31,8 +31,16 @@ def run_checks(conn, assignment_id: int, answers: dict) -> dict:
 
 def record_submission(conn, student_id: int, assignment_id: int, answers: dict,
                       submitted_at: str, photo_name: Optional[str] = None,
-                      source: str = "live", results: Optional[dict] = None) -> tuple[int, dict]:
-    """Записать сданную работу: шаги, попытки и наблюдения. → (submission_id, results)"""
+                      source: str = "live", results: Optional[dict] = None,
+                      line_confidence: Optional[dict] = None) -> tuple[int, dict]:
+    """Записать сданную работу: шаги, попытки и наблюдения. → (submission_id, results)
+
+    line_confidence: {(problem_id, line_no): уверенность распознавания} — строки из фото,
+    которые учитель не поправил (ocr.unverified). Ошибка, которая опирается на такую строку
+    (ocr.error_unverified), пишется с confidence = 0.6 и detail.ocr_unverified = True."""
+    from .ocr import error_unverified  # внутри функции: без циклического импорта
+    ocr_unverified_confidence = 0.6
+    line_confidence = line_confidence or {}
     results = results if results is not None else run_checks(conn, assignment_id, answers)
     cur = conn.execute(
         "INSERT INTO submissions (student_id, assignment_id, photo_name, submitted_at, source) VALUES (?,?,?,?,?)",
@@ -57,10 +65,14 @@ def record_submission(conn, student_id: int, assignment_id: int, answers: dict,
              fe["line"] if fe else None, json.dumps(res.final, ensure_ascii=False)),
         )
         if fe:
+            conf = OTHER_CONFIDENCE if fe["tag"] == "other" else RULE_CONFIDENCE
+            detail = fe.get("detail")
+            if error_unverified(pid, res, line_confidence):
+                conf = min(conf, ocr_unverified_confidence)
+                detail = {**(detail or {}), "ocr_unverified": True}
             db.add_observation(
                 conn, student_id, sub_id, pid, fe["line"], "error", fe["tag"], p["skill"],
-                fe["evidence"], fe.get("detail"), "auto",
-                OTHER_CONFIDENCE if fe["tag"] == "other" else RULE_CONFIDENCE, submitted_at,
+                fe["evidence"], detail, "auto", conf, submitted_at,
             )
         for m in res.methods:
             first = next((l.no for l in res.lines if l.kind in ("disc", "vieta", "eq", "eqs")), None)

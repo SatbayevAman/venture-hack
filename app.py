@@ -14,6 +14,7 @@ import pandas as pd
 import streamlit as st
 
 from core import db, llm, pipeline, portrait, seed
+from core import ocr, ocr_store
 from core import tags as T
 from core.tags import question_for, tag_comment_keywords
 
@@ -543,27 +544,133 @@ def page_check():
     tab_photo, tab_text = st.tabs([L("📷 Фото тетради", "📷 Дәптер фотосы"), L("⌨️ Ввести текстом", "⌨️ Мәтінмен енгізу")])
     cfg = ss["llm_cfg"]
     with tab_photo:
-        up = st.file_uploader(L("Фото решения (jpg, png)", "Шешім фотосы (jpg, png)"), type=["jpg", "jpeg", "png", "webp"],
+        types = ", ".join(t for t in llm.PHOTO_TYPES if t not in ("jpeg", "heif"))
+        up = st.file_uploader(L(f"Фото решения ({types})", f"Шешім фотосы ({types})"), type=llm.PHOTO_TYPES,
                               key=f"photo_{aid}")
-        if up is not None:
-            st.image(up, width=420)
         if not cfg.ready:
             st.info(L("Для распознавания почерка подключите языковую модель в боковой панели. "
                       "Запасной путь — вкладка «Ввести текстом»: журнал и портрет работают так же.",
                       "Қолжазбаны тану үшін бүйір панельде тілдік модельді қосыңыз. "
                       "Балама жол — «Мәтінмен енгізу» қойындысы: журнал мен портрет дәл солай жұмыс істейді."))
-        if st.button(L("Распознать строки", "Жолдарды тану"), disabled=not (cfg.ready and up is not None), type="primary"):
+        c_btn, c_tgl = st.columns([1, 2])
+        passes = 2 if c_tgl.toggle(L("Два прочтения (точнее, дороже)", "Екі рет оқу (дәлірек, қымбатырақ)"),
+                                   key="ocr_two_passes", value=False,
+                                   help=L("Фото читается дважды разными запросами; строки, где прочтения разошлись, "
+                                          "помечаются ⚠️ и показывают оба варианта.",
+                                          "Фото екі түрлі сұраумен екі рет оқылады; оқулар сәйкес келмеген жолдар "
+                                          "⚠️ белгіленіп, екі нұсқасы да көрсетіледі.")) else 1
+        if c_btn.button(L("Распознать строки", "Жолдарды тану"), disabled=not (cfg.ready and up is not None), type="primary"):
             try:
+                t0 = datetime.now()
                 with st.spinner(L("Распознаю почерк…", "Қолжазбаны танып жатырмын…")):
-                    res = llm.recognize(cfg, up.getvalue(), [(p["idx"], p["statement"]) for p in probs])
-                for p in probs:
-                    if p["idx"] in res:
-                        ss[f"lines_{aid}_{p['id']}"] = "\n".join(res[p["idx"]])
+                    det = llm.recognize_detailed(cfg, up.getvalue(), [(p["idx"], p["statement"]) for p in probs], passes=passes)
+
+                def _prep(lines):
+                    out = []
+                    for l in lines:
+                        l = {**l, "text": ocr.clean_text(l["text"])}
+                        if l.get("alternatives"):
+                            l["alternatives"] = [ocr.clean_text(a) for a in l["alternatives"]]
+                        out.append(l)
+                    return ocr.score_lines(out)
+                ss["ocr_view"] = {p["id"]: _prep(det.get(p["idx"], [])) for p in probs}
+                ss["ocr_raw"] = {pid: list(ls) for pid, ls in ss["ocr_view"].items()}
+                ss["ocr_unassigned"] = _prep(det.get(llm.UNASSIGNED, []))
+                ss["ocr_aid"], ss["ocr_run"] = aid, ss.get("ocr_run", 0) + 1
+                ss["ocr_secs"] = (datetime.now() - t0).total_seconds()
                 ss["photo_name"] = up.name
-                st.success(L("Готово. Проверьте строки во вкладке «Ввести текстом» — там их можно поправить.",
-                             "Дайын. Жолдарды «Мәтінмен енгізу» қойындысында тексеріп, түзетуге болады."))
+                ss.pop("ocr_accepted", None)
             except llm.LLMError as ex:
                 st.error(str(ex))
+
+        raw = ss.get("ocr_view") if ss.get("ocr_aid") == aid else None  # как прочитала модель — для таблиц
+
+        def _cell(v) -> str:  # ячейка таблицы → строка (пустые и удалённые ячейки — None/NaN)
+            return "" if v is None or (isinstance(v, float) and pd.isna(v)) else str(v).strip()
+        flag_name = {"illegible": L("неразборчиво", "анық оқылмайды"), "unparsable": L("не разбирается", "талданбайды"),
+                     "disagree": L("прочтения разошлись", "оқулар сәйкес келмейді")}
+        if raw is None and up is not None:
+            st.image(llm.prepare_image(up.getvalue())[0], width=420)
+        if raw is not None:
+            c_img, c_tab = st.columns([1, 1.35])
+            with c_img:
+                if up is not None:
+                    st.image(llm.prepare_image(up.getvalue())[0], use_container_width=True)
+                else:
+                    st.caption(L("Фото не сохраняется. Загрузите его снова, чтобы сверять строки рядом с ним.",
+                                 "Фото сақталмайды. Жолдарды қасында салыстыру үшін оны қайта жүктеңіз."))
+            with c_tab:
+                all_lines = [l for ls in raw.values() for l in ls] + list(ss.get("ocr_unassigned") or [])
+                n_bad = sum(ocr.needs_review(l) for l in all_lines)
+                few = n_bad % 10 in (2, 3, 4) and n_bad % 100 not in (12, 13, 14)
+                one = n_bad % 10 == 1 and n_bad % 100 != 11
+                msg = L(f"{n_bad} {'строка' if one else 'строки' if few else 'строк'} из {len(all_lines)} "
+                        f"{'требует' if one else 'требуют'} проверки",
+                        f"{len(all_lines)} жолдың {n_bad}-і тексеруді қажет етеді")
+                (st.warning if n_bad else st.success)(("⚠️ " if n_bad else "✅ ") + msg
+                                                      + f" · {ss.get('ocr_secs', 0):.0f} {L('с', 'с')}")
+                run = ss.get("ocr_run", 0)
+                edited = {}
+                for p in probs:
+                    lines = raw.get(p["id"], [])
+                    two = any(l.get("alternatives") for l in lines)
+                    df = pd.DataFrame([{
+                        "no": i, "text": l["text"], "conf": round(l["confidence"] * 100),
+                        "flag": ("⚠️ " + flag_name[l["flags"][0]]) if ocr.needs_review(l) and l["flags"] else "",
+                        **({"alt": (l.get("alternatives") or ["", ""])[1] if l.get("alternatives") else "",
+                            "take": False} if two else {}),
+                    } for i, l in enumerate(lines, 1)], columns=["no", "text", "conf", "flag"] + (["alt", "take"] if two else []))
+                    st.markdown(f"**№{p['idx']}.** {esc(p['statement'])}")
+                    cols = {"no": st.column_config.NumberColumn("№", disabled=True, width="small"),
+                            "text": st.column_config.TextColumn(L("Строка", "Жол")),
+                            "conf": st.column_config.NumberColumn(L("Уверенность", "Сенімділік"), format="%d %%",
+                                                                  disabled=True, width="small"),
+                            "flag": st.column_config.TextColumn(L("Флаг", "Белгі"), disabled=True)}
+                    if two:
+                        cols["alt"] = st.column_config.TextColumn(L("Второе прочтение", "Екінші оқу"), disabled=True)
+                        cols["take"] = st.column_config.CheckboxColumn(L("Взять его", "Соны алу"), width="small")
+                    order = ["no", "text"] + (["alt", "take"] if two else []) + ["conf", "flag"]
+                    edited[p["id"]] = st.data_editor(df, column_config=cols, column_order=order, hide_index=True,
+                                                     num_rows="dynamic",
+                                                     use_container_width=True, key=f"ocr_ed_{aid}_{p['id']}_{run}")
+                loose = ss.get("ocr_unassigned") or []
+                loose_df = None
+                if loose:
+                    st.markdown("**" + L("Строки без задачи", "Есепке жатпайтын жолдар") + "**")
+                    st.caption(L("Модель не поняла, к какой задаче относятся эти строки. Выберите задачу или оставьте «—».",
+                                 "Модель бұл жолдардың қай есепке жататынын анықтамады. Есепті таңдаңыз немесе «—» қалдырыңыз."))
+                    opts = ["—"] + [f"№{p['idx']}" for p in probs]
+                    loose_df = st.data_editor(
+                        pd.DataFrame([{"text": l["text"], "conf": round(l["confidence"] * 100), "to": "—"} for l in loose]),
+                        column_config={"text": st.column_config.TextColumn(L("Строка", "Жол"), width="large"),
+                                       "conf": st.column_config.NumberColumn(L("Уверенность", "Сенімділік"), format="%d %%",
+                                                                             disabled=True, width="small"),
+                                       "to": st.column_config.SelectboxColumn(L("Задача", "Есеп"), options=opts, required=True)},
+                        hide_index=True, use_container_width=True, key=f"ocr_loose_{aid}_{run}")
+                if st.button(L("Принять строки", "Жолдарды қабылдау"), type="primary", use_container_width=True):
+                    new_raw = {pid: list(ls) for pid, ls in raw.items()}
+                    for p in probs:
+                        texts = []
+                        for _, row in edited[p["id"]].iterrows():
+                            take = row.get("take")
+                            t = _cell(row.get("alt") if pd.notna(take) and bool(take) else row.get("text"))
+                            if t:
+                                texts.append(t)
+                        if loose_df is not None:
+                            for (_, row), l in zip(loose_df.iterrows(), loose):
+                                if row["to"] == f"№{p['idx']}" and _cell(row["text"]):
+                                    texts.append(_cell(row["text"]))
+                                    new_raw[p["id"]].append(l)  # строка из распознавания — для учёта правок
+                        ss[f"lines_{aid}_{p['id']}"] = "\n".join(texts)
+                    ss["ocr_raw"] = new_raw  # + строки без задачи, которые учитель отнёс к задаче
+                    ss["ocr_accepted"] = True
+                    st.rerun()
+                if ss.get("ocr_accepted"):
+                    es = ocr.edit_stats(ss.get("ocr_raw") or raw, {p["id"]: ss.get(f"lines_{aid}_{p['id']}", "").splitlines() for p in probs})
+                    st.success(L(f"Строки приняты: исправлено {es['edited']} из {es['total']}. "
+                                 "Нажмите «Проверить» ниже или поправьте текст во вкладке «Ввести текстом».",
+                                 f"Жолдар қабылданды: {es['total']} жолдың {es['edited']}-і түзетілді. "
+                                 "Төмендегі «Тексеру» батырмасын басыңыз немесе мәтінді «Мәтінмен енгізу» қойындысында түзетіңіз."))
         st.caption(L("Фото не сохраняется: после распознавания в базе остаются только строки текста.",
                      "Фото сақталмайды: танылғаннан кейін базада тек мәтін жолдары қалады."))
     with tab_text:
@@ -616,6 +723,10 @@ def page_check():
             st.markdown(f'<div class="q"><b>{L("Наводящий вопрос ученику", "Оқушыға бағыттаушы сұрақ")}</b><br>'
                         f'{esc(question_for(fe, lang))}<br><span class="muted">{esc(question_for(fe, other))}</span></div>',
                         unsafe_allow_html=True)
+            if ocr.error_unverified(pid, res, ocr.unverified(ss.get("ocr_raw") or {}, chk["answers"])):
+                st.warning(L("⚠️ Ошибка найдена в строке, которую распознавание прочитало неуверенно. "
+                             "Сверьте её с фото перед записью.",
+                             "⚠️ Қате тану сенімсіз оқыған жолдан табылды. Журналға жазбас бұрын оны фотомен салыстырыңыз."))
             with st.expander(L("Для учителя: что нашла проверка", "Мұғалімге: тексеру не тапты")):
                 det = fe.get("detail") or {}
                 st.markdown(f"- {L('Тип', 'Түрі')}: **{T.name(fe['tag'], lang)}**\n"
@@ -649,7 +760,11 @@ def page_check():
             pipeline.delete_submission(conn, o["id"])
         before = portrait.snapshot(portrait.build(conn, sid, lang))
         sub_id, _ = pipeline.record_submission(conn, sid, aid, chk["answers"], datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                               photo_name=ss.get("photo_name"), source="live", results=chk["results"])
+                                               photo_name=ss.get("photo_name"), source="live", results=chk["results"],
+                                               line_confidence=ocr.unverified(ss.get("ocr_raw") or {}, chk["answers"]))
+        if ss.get("ocr_raw"):  # журнал распознаваний: что прочитала модель и что оставил учитель
+            ocr_store.save(conn, sub_id, {k: v for k, v in ss["ocr_raw"].items() if k in chk["answers"]}, chk["answers"])
+            ss.pop("ocr_raw", None)
         text = (ss.get("comment_text") or "").strip()
         if text:
             tagged, tagger = None, "keywords"
