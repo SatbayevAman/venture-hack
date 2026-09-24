@@ -233,3 +233,46 @@ def test_no_escaped_text_inside_code_spans():
     hits = [f"{f.name}:{i}" for f in files for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1)
             if bad.search(line)]
     assert hits == []
+
+
+# ---------------------------------------------------------------- O5. лимит обращений к модели
+
+def click(at, label: str):
+    """Нажать кнопку по началу подписи и перерисовать страницу."""
+    btn = next(b for b in at.button if b.label.startswith(label))
+    btn.click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    return at
+
+
+def record_demo_work(at):
+    """Сценарий демо: «Вставить демо-работу» → «Проверить» → «Записать в журнал и обновить портрет»."""
+    click(at, "Вставить демо-работу")
+    click(at, "Проверить")
+    return click(at, "Записать в журнал")
+
+
+def test_rate_limit_falls_back_to_keywords(app_db, monkeypatch):
+    from core import llm
+    calls = []
+    monkeypatch.setattr(auth, "rate_limit", lambda user, action="llm", now=None: calls.append(action) or False)
+    monkeypatch.setattr(llm, "tag_comment", lambda *a, **k: pytest.fail("модель вызвана сверх лимита"))
+    teacher = auth.get_user_by_login(app_db, auth.DEMO_TEACHER)
+    at = run_app("check", teacher, llm_cfg=llm.LLMConfig("anthropic", "test-key", "m", ""))
+    record_demo_work(at)
+    sub = db.q1(app_db, "SELECT id FROM submissions WHERE source='live' ORDER BY id DESC LIMIT 1")
+    assert sub is not None  # работа записана, хотя прежняя уже удалена к моменту разметки
+    tc = db.q1(app_db, "SELECT tagger FROM teacher_comments WHERE submission_id=?", (sub["id"],))
+    assert tc["tagger"] == "keywords" and calls == ["llm"]
+    assert db.q1(app_db, "SELECT COUNT(*) c FROM observations WHERE submission_id=? AND source='teacher'",
+                 (sub["id"],))["c"] > 0
+
+
+def test_rate_limit_blocks_personalize(app_db, monkeypatch):
+    from core import llm
+    monkeypatch.setattr(auth, "rate_limit", lambda user, action="llm", now=None: False)
+    monkeypatch.setattr(llm, "personalize", lambda *a, **k: pytest.fail("модель вызвана сверх лимита"))
+    teacher = auth.get_user_by_login(app_db, auth.DEMO_TEACHER)
+    at = run_app("portrait", teacher, llm_cfg=llm.LLMConfig("anthropic", "test-key", "m", ""))
+    click(at, "✨ Привязать советы")
+    assert any("Лимит обращений к модели" in w.value for w in at.warning)

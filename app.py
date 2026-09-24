@@ -293,6 +293,15 @@ def no_students() -> bool:
     return True
 
 
+def llm_allowed(ru: str, kk: str) -> bool:
+    """Лимит обращений к модели на пользователя (auth.rate_limit, Дзета B4). При отказе — предупреждение, вызова нет."""
+    if auth.rate_limit(user, "llm"):
+        return True
+    n = auth.RATE_LIMITS["llm"][0]
+    st.warning(L(f"Лимит обращений к модели: {n} в час. ", f"Модельге жүгіну шегі: сағатына {n}. ") + L(ru, kk))
+    return False
+
+
 def go(page_key: str, student_id: int | None = None):
     ss["set_page"] = page_key
     if student_id is not None:
@@ -507,7 +516,9 @@ def portrait_teacher(p: dict):
     pers = ss.get("personalized", {}).get((p["student"]["id"], lang))
     cfg = ss["llm_cfg"]
     if recs and cfg.ready and not pers:
-        if st.button(L("✨ Привязать советы к работам (ИИ)", "✨ Кеңестерді жұмыстарға байланыстыру (ЖИ)")):
+        if st.button(L("✨ Привязать советы к работам (ИИ)", "✨ Кеңестерді жұмыстарға байланыстыру (ЖИ)")) and llm_allowed(
+                "Попробуйте позже — пока показаны советы из словаря.",
+                "Кейінірек қайталаңыз — әзірге сөздіктегі кеңестер көрсетілді."):
             try:
                 with st.spinner(L("Формулирую…", "Тұжырымдап жатырмын…")):
                     adv = llm.personalize(cfg, recs[:3], p["student"]["alias"], lang)
@@ -626,7 +637,9 @@ def page_check():
                                           "помечаются ⚠️ и показывают оба варианта.",
                                           "Фото екі түрлі сұраумен екі рет оқылады; оқулар сәйкес келмеген жолдар "
                                           "⚠️ белгіленіп, екі нұсқасы да көрсетіледі.")) else 1
-        if c_btn.button(L("Распознать строки", "Жолдарды тану"), disabled=not (cfg.ready and up is not None), type="primary"):
+        if c_btn.button(L("Распознать строки", "Жолдарды тану"), disabled=not (cfg.ready and up is not None),
+                        type="primary") and llm_allowed("Попробуйте позже или введите строки текстом.",
+                                                        "Кейінірек қайталаңыз немесе жолдарды мәтінмен енгізіңіз."):
             try:
                 t0 = datetime.now()
                 with st.spinner(L("Распознаю почерк…", "Қолжазбаны танып жатырмын…")):
@@ -846,7 +859,7 @@ def page_check():
         text = (ss.get("comment_text") or "").strip()
         if text:
             tagged, tagger = None, "keywords"
-            if cfg.ready:
+            if cfg.ready and auth.rate_limit(user, "llm"):  # лимит — как ошибка модели: разметка по словарю
                 try:
                     tagged, tagger = llm.tag_comment(cfg, text), "llm"
                 except llm.LLMError:
