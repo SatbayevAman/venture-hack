@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 from datetime import datetime, timedelta
 
@@ -301,6 +302,77 @@ def _add_assignment(conn, number: int, hw: dict) -> int:
     return aid
 
 
+# Задания по новым темам (агент Бета) — для живой проверки, без синтетических сдач.
+# Задача: (skill, kind, statement, эталонные строки, ответ). Строки «Ответ» в эталон не входят.
+EXTRA_ASSIGNMENTS = [
+    {"number": 8, "title": "ДЗ №8 «Неравенства»", "due": "2026-09-29 23:59", "problems": [
+        ("inequality", "inequality", "2 − 3x < 11",
+         ["−3x < 11 − 2", "−3x < 9", "x > −3", "Ответ: (−3; +∞)"], "(−3; +∞)"),
+        ("inequality", "inequality", "x² − x − 6 ≤ 0",
+         ["x² − x − 6 = 0", "D = 1 + 24 = 25", "x₁ = (1 + 5)/2 = 3", "x₂ = (1 − 5)/2 = −2", "+ − +",
+          "Ответ: [−2; 3]"], "[−2; 3]"),
+        ("inequality", "inequality", "(x − 3)/(x + 1) ≥ 0",
+         ["ОДЗ: x ≠ −1", "x₁ = 3, x₂ = −1", "+ − +", "Ответ: (−∞; −1) ∪ [3; +∞)"], "(−∞; −1) ∪ [3; +∞)"),
+    ]},
+]
+
+# Типичные ошибки для синтетической истории по новым темам (только при PORTRET_EXTRA_SEED=1):
+# номер задания → {idx задачи: {вариант: строки}}
+EXTRA_VARIANTS = {
+    8: {
+        1: {"flip": ["−3x < 11 − 2", "−3x < 9", "x < −3", "Ответ: (−∞; −3)"],
+            "sign": ["−3x < 11 + 2", "−3x < 13", "x > −13/3", "Ответ: (−13/3; +∞)"]},
+        2: {"boundary": ["x² − x − 6 = 0", "x₁ = 3, x₂ = −2", "Ответ: (−2; 3)"],
+            "choice": ["x² − x − 6 = 0", "x₁ = 3, x₂ = −2", "Ответ: (−∞; −2] ∪ [3; +∞)"]},
+        3: {"domain": ["x₁ = 3, x₂ = −1", "+ − +", "Ответ: (−∞; −1] ∪ [3; +∞)"],
+            "mul": ["x − 3 ≥ 0", "x ≥ 3", "Ответ: [3; +∞)"]},
+    },
+}
+# ученик → номер задания → варианты по задачам (None — эталонное решение)
+EXTRA_PLAN = {
+    "Айгерим": {8: (None, "boundary", "domain")},
+    "Данияр": {8: ("flip", None, None)},
+    "Мадина": {8: (None, None, None)},
+    "Арман": {8: ("sign", "choice", "domain")},
+    "Жанель": {8: (None, None, "domain")},
+    "Тимур": {8: ("flip", None, "mul")},
+    "Алия": {8: (None, "boundary", None)},
+    "Ерасыл": {8: ("flip", "choice", None)},
+}
+
+
+def _add_extra_assignment(conn, number: int, title: str, due: str, problems: list) -> int:
+    cur = conn.execute("INSERT INTO assignments (number, title, due_at) VALUES (?,?,?)",
+                       (number, title, due + ":00"))
+    aid = cur.lastrowid
+    for idx, (skill, kind, st, ref, ans) in enumerate(problems, start=1):
+        reference = [l for l in ref if not l.lower().startswith("ответ")]
+        conn.execute(
+            "INSERT INTO problems (assignment_id, idx, skill, kind, statement, reference, answer) VALUES (?,?,?,?,?,?,?)",
+            (aid, idx, skill, kind, st, json.dumps(reference, ensure_ascii=False), ans),
+        )
+    return aid
+
+
+def _extra_synthetic(conn, sids: dict, rng: random.Random) -> None:
+    """Синтетические сдачи по новым темам — только при PORTRET_EXTRA_SEED=1 (иначе меняются числа демо)."""
+    for ex in EXTRA_ASSIGNMENTS:
+        aid = db.q1(conn, "SELECT id FROM assignments WHERE number=?", (ex["number"],))["id"]
+        pid = {p["idx"]: p["id"] for p in pipeline.problems_of(conn, aid)}
+        due = datetime.strptime(ex["due"], "%Y-%m-%d %H:%M")
+        for name, plan in EXTRA_PLAN.items():
+            variants = plan.get(ex["number"])
+            if not variants:
+                continue
+            answers = {}
+            for idx, v in enumerate(variants, start=1):
+                ref = ex["problems"][idx - 1][3]
+                answers[pid[idx]] = list(EXTRA_VARIANTS[ex["number"]][idx][v] if v else ref)
+            ts = due - timedelta(hours=rng.randint(3, 50), minutes=rng.randint(0, 59))
+            pipeline.record_submission(conn, sids[name], aid, answers, ts.strftime("%Y-%m-%d %H:%M:%S"),
+                                       photo_name=None, source="synthetic")
+
+
 def build(conn, progress=None) -> None:
     db.init(conn)
     rng = random.Random(2026)
@@ -346,8 +418,14 @@ def build(conn, progress=None) -> None:
             done += 1
             if progress:
                 progress(done / total)
+    for ex in EXTRA_ASSIGNMENTS:
+        _add_extra_assignment(conn, ex["number"], ex["title"], ex["due"], ex["problems"])
+    if os.environ.get("PORTRET_EXTRA_SEED") == "1":
+        _extra_synthetic(conn, sids, random.Random(2027))
     conn.commit()
 
 
 def live_assignment_id(conn) -> int:
-    return db.q1(conn, "SELECT id FROM assignments ORDER BY number DESC LIMIT 1")["id"]
+    """ДЗ для живого демо — всегда №7 (len(HOMEWORKS) + 1), даже если заданий больше."""
+    row = db.q1(conn, "SELECT id FROM assignments WHERE number=?", (len(HOMEWORKS) + 1,))
+    return row["id"] if row else db.q1(conn, "SELECT id FROM assignments ORDER BY number DESC LIMIT 1")["id"]
