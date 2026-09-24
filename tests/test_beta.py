@@ -384,3 +384,67 @@ def test_biquadratic_t_segment_error_points_to_t_equation():
     r = check_problem("biquadratic", B1, ["t = x²", "t² − 5t + 4 = 0", "t₁ = 2, t₂ = 3"], 6)
     fe = r.first_error
     assert (fe["tag"], fe["line"], fe["prev_line"]) == ("calc", 3, 2) and "t² − 5t + 4 = 0" in fe["evidence"]
+
+
+# ---------------------------------------------------------------- B3. алгебраические дроби
+
+@pytest.mark.parametrize("statement,lines,line", [
+    ("(x + 2)/(x + 4)", ["2/4"], 1),                              # общее слагаемое сверху и снизу
+    ("(x² + 3x)/x", ["x² + 3"], 1),                               # «сократили» одно слагаемое числителя
+    ("(x² − 9)/(x² + 3x)", ["−9/(3x)"], 1),
+    ("(x² − 1)/(x − 1)", ["x²/x", "x"], 1),
+    ("(5x + 10)/5", ["x + 10"], 1),                               # числовой знаменатель
+    ("(a + 3)/(a + 5) + 1", ["3/5 + 1"], 1),                      # дробь внутри выражения
+    ("(x² + 3x)/(x² + 5x)", ["x(x + 3)/(x(x + 5))", "(x + 3)/(x + 5)", "3/5"], 3),  # после верных шагов
+])
+def test_cancel_terms(statement, lines, line):
+    r, t, ln = first("expression", statement, lines, 3)
+    assert (t, ln) == ("cancel_terms", line)
+    assert r.first_error["detail"]["f"]
+
+
+@pytest.mark.parametrize("statement,lines", [
+    # верное сокращение множителя — не ошибка
+    ("(x² + 3x)/x", ["x(x + 3)/x", "x + 3"]),
+    ("(x² + 3x)/x", ["x + 3"]),
+    ("(x² − 9)/(x² + 3x)", ["(x − 3)(x + 3)/(x(x + 3))", "(x − 3)/x"]),
+    ("(2a + 6)/(a² + 3a)", ["2(a + 3)/(a(a + 3))", "2/a"]),
+    ("(5x + 10)/5", ["x + 2"]),
+])
+def test_cancel_factor_is_not_an_error(statement, lines):
+    r, t, _ = first("expression", statement, lines, 3)
+    assert t is None and r.correct is True
+
+
+@pytest.mark.parametrize("statement,lines,tag", [
+    # другие ошибки в дробях — не cancel_terms
+    ("(x² − 4)/(x + 2)", ["(x − 2)(x + 2)/(x + 2)", "x + 2"], "sign"),
+    ("(2a + 6)/(a² + 3a)", ["2(a + 3)/(a(a + 3))", "2/(a + 3)"], "calc"),
+    ("(x² − 4)/(x + 2)", ["(x² − 4)/(x + 2)", "(x² − 4)/x + 2"], "other"),
+])
+def test_cancel_terms_does_not_fire(statement, lines, tag):
+    _, t, _ = first("expression", statement, lines, 3)
+    assert t == tag
+
+
+def test_fractions_dictionary_and_question():
+    assert T.SKILLS["fractions"] == {"ru": "Алгебраические дроби", "kk": "Алгебралық бөлшектер"}
+    assert all(T.TAGS["cancel_terms"][f] for f in ("ru", "kk", "teacher_ru", "teacher_kk", "student_ru", "student_kk"))
+    r = check_problem("expression", "(x² + 3x)/x", ["x² + 3"], 2)
+    for lang in ("ru", "kk"):
+        q = question_for(r.first_error, lang)
+        assert q and "{" not in q and "x + 3" not in q
+    assert {t["tag"] for t in T.tag_comment_keywords("Сокращает слагаемые, а не множители.")} >= {"cancel_terms"}
+
+
+def test_all_extra_skills_in_class_map(tmp_path, monkeypatch):
+    monkeypatch.setenv("PORTRET_EXTRA_SEED", "1")
+    conn = db.connect(tmp_path / "t.db")
+    seed.build(conn)
+    rows = portrait.class_map(conn, "ru")
+    for skill in ("inequality", "system", "biquadratic", "fractions"):
+        assert any(r["cells"][skill]["total"] for r in rows), skill
+    # числа синтетической истории по старым темам не меняются
+    p = portrait.build(conn, 1, "ru")
+    lost = next(e for e in p["errors"] if e["tag"] == "lost_root" and e["skill"] == "quadratic")
+    assert (lost["count"], lost["total"]) == (4, 6)

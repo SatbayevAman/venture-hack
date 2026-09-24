@@ -329,6 +329,11 @@ EXTRA_ASSIGNMENTS = [
          ["Пусть x² = t, t ≥ 0", "t² + 2t − 3 = 0", "t₁ = 1, t₂ = −3", "t = −3 не подходит", "x² = 1", "x = ±1",
           "Ответ: −1; 1"], "−1; 1"),
     ]},
+    {"number": 11, "title": "ДЗ №11 «Алгебраические дроби»", "due": "2026-10-09 23:59", "problems": [
+        ("fractions", "expression", "(x² + 3x)/x", ["x(x + 3)/x", "x + 3"], "x + 3"),
+        ("fractions", "expression", "(x² − 9)/(x² + 3x)", ["(x − 3)(x + 3)/(x(x + 3))", "(x − 3)/x"], "(x − 3)/x"),
+        ("fractions", "expression", "(a² + 5a)/(a² + 2a)", ["a(a + 5)/(a(a + 2))", "(a + 5)/(a + 2)"], "(a + 5)/(a + 2)"),
+    ]},
 ]
 
 # Типичные ошибки для синтетической истории по новым темам (только при PORTRET_EXTRA_SEED=1):
@@ -353,17 +358,22 @@ EXTRA_VARIANTS = {
         2: {"neg_t": ["Пусть x² = t", "t² + 2t − 3 = 0", "t₁ = 1, t₂ = −3", "x² = 1 или x² = −3", "x = ±1, x = ±√3",
                       "Ответ: ±1; ±√3"]},
     },
+    11: {
+        1: {"cancel": ["x² + 3"]},
+        2: {"cancel": ["−9/(3x)", "−3/x"]},
+        3: {"cancel": ["5a/(2a)", "5/2"]},
+    },
 }
 # ученик → номер задания → варианты по задачам (None — эталонное решение)
 EXTRA_PLAN = {
-    "Айгерим": {8: (None, "boundary", "domain"), 9: (None, "lost"), 10: ("pm", None)},
-    "Данияр": {8: ("flip", None, None), 9: ("subst", None), 10: (None, None)},
-    "Мадина": {8: (None, None, None), 9: (None, None), 10: (None, "neg_t")},
-    "Арман": {8: ("sign", "choice", "domain"), 9: ("swap", "fsu"), 10: ("pm", "neg_t")},
-    "Жанель": {8: (None, None, "domain"), 9: ("subst", None), 10: (None, "neg_t")},
-    "Тимур": {8: ("flip", None, "mul"), 9: (None, "lost"), 10: (None, None)},
-    "Алия": {8: (None, "boundary", None), 9: ("swap", None), 10: ("pm", None)},
-    "Ерасыл": {8: ("flip", "choice", None), 9: ("subst", "lost"), 10: (None, "neg_t")},
+    "Айгерим": {8: (None, "boundary", "domain"), 9: (None, "lost"), 10: ("pm", None), 11: (None, "cancel", None)},
+    "Данияр": {8: ("flip", None, None), 9: ("subst", None), 10: (None, None), 11: ("cancel", None, None)},
+    "Мадина": {8: (None, None, None), 9: (None, None), 10: (None, "neg_t"), 11: (None, None, None)},
+    "Арман": {8: ("sign", "choice", "domain"), 9: ("swap", "fsu"), 10: ("pm", "neg_t"), 11: ("cancel", "cancel", None)},
+    "Жанель": {8: (None, None, "domain"), 9: ("subst", None), 10: (None, "neg_t"), 11: (None, None, "cancel")},
+    "Тимур": {8: ("flip", None, "mul"), 9: (None, "lost"), 10: (None, None), 11: (None, "cancel", None)},
+    "Алия": {8: (None, "boundary", None), 9: ("swap", None), 10: ("pm", None), 11: ("cancel", None, None)},
+    "Ерасыл": {8: ("flip", "choice", None), 9: ("subst", "lost"), 10: (None, "neg_t"), 11: ("cancel", None, "cancel")},
 }
 
 
