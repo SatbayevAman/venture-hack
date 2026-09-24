@@ -1,7 +1,12 @@
 """Стыки после слияния шести направлений (агент Омега, пункты O1–O15 из agents/OMEGA.md)."""
+import time
+from pathlib import Path
+
 import pytest
 
-from core import db, ocr_store, pipeline, portrait, practice, quality, review, seed
+from core import auth, consent, db, ocr_store, pipeline, portrait, practice, quality, review, seed
+
+ROOT = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture(scope="module")
@@ -22,6 +27,48 @@ def conn(seeded, tmp_path):
     src.close()
     yield dst
     dst.close()
+
+
+@pytest.fixture
+def app_db(seeded, tmp_path, monkeypatch):
+    """База для прогона app.py через AppTest: копия сида + демо-пользователи; PORTRET_DB указывает на неё."""
+    path = tmp_path / "app.db"
+    src, dst = db.connect(seeded), db.connect(path)
+    src.backup(dst)
+    src.close()
+    auth.ensure_demo_users(dst)
+    monkeypatch.setenv("PORTRET_DB", str(path))
+    monkeypatch.delenv("PORTRET_AUTH", raising=False)
+    yield dst
+    dst.close()
+
+
+def run_app(page: str, user: dict | None, lang: str = "ru", **state):
+    """Один прогон app.py: вход — через session_state["user"], раздел — через session_state["page"]."""
+    import streamlit as st
+    from streamlit.testing.v1 import AppTest
+    st.cache_resource.clear()  # get_conn кэширует соединение на процесс — у каждого теста своя база
+    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=180)
+    at.session_state["lang"] = lang
+    at.session_state["page"] = page
+    if user is not None:
+        at.session_state["user"] = user
+        at.session_state["user_seen_at"] = time.time()
+    for k, v in state.items():
+        at.session_state[k] = v
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    return at
+
+
+def _texts(at) -> str:
+    """Весь видимый текст страницы — для проверок «есть / нет на экране»."""
+    parts = []
+    for kind in ("markdown", "caption", "warning", "info", "error", "success", "title", "header", "subheader", "metric"):
+        for el in getattr(at, kind):
+            parts.append(str(getattr(el, "value", "")) + " " + str(getattr(el, "label", "")))
+    parts += [e.label for e in at.expander]
+    return "\n".join(parts)
 
 
 def _aigerim(conn) -> int:
@@ -110,7 +157,6 @@ def _secret_9b(conn) -> tuple[int, int]:
 
 
 def test_quality_scoped_to_visible_students(conn):
-    from core import auth
     sid_b, err_b = _secret_9b(conn)
     a = _aigerim(conn)
     own = db.q1(conn, "SELECT id FROM observations WHERE student_id=? AND kind='error' AND source='auto'", (a,))["id"]
@@ -140,3 +186,38 @@ def test_quality_scoped_to_visible_students(conn):
     assert "Секретный-9Б" in quality.candidates_markdown(conn)
     assert quality.timing_summary(conn)["n"] == 1 and review.rating_summary(conn)["n"] == 2
     assert quality.rejected_cases(conn, None, student_ids=set()) == []
+
+
+# ---------------------------------------------------------------- O3. тренажёр и согласие
+
+def test_practice_gate_follows_consent(conn):
+    sid = _aigerim(conn)
+    assert practice.can_practice(conn, sid)  # синтетический ученик: согласие ставится само
+    consent.revoke(conn, sid)
+    assert not practice.can_practice(conn, sid)
+    consent.give(conn, sid, "№ 12 от 01.09.2026", None)
+    assert practice.can_practice(conn, sid)
+    real = conn.execute("INSERT INTO students (alias, class_name) VALUES (?,?)", ("Настоящий", seed.CLASS_NAME)).lastrowid
+    assert not practice.can_practice(conn, real)  # у настоящего ученика согласия по умолчанию нет
+
+
+@pytest.mark.parametrize("login", [auth.DEMO_STUDENT, auth.DEMO_TEACHER])
+def test_practice_page_without_consent_writes_nothing(app_db, login):
+    sid = _aigerim(app_db)
+    consent.required_ok(app_db, sid)
+    consent.revoke(app_db, sid)
+    user = auth.get_user_by_login(app_db, login)
+    at = run_app("practice", user, student_id=sid)
+    text = _texts(at)
+    assert "нет согласия" in text.lower()
+    assert ("Для учителя" in text) == (login == auth.DEMO_TEACHER)  # сводка по классу — только учителю
+    practice.ensure_schema(app_db)
+    for t in ("practice_sessions", "practice_items", "practice_attempts"):
+        assert db.q1(app_db, f"SELECT COUNT(*) c FROM {t}")["c"] == 0
+
+
+def test_practice_class_block_hidden_for_student(app_db):
+    student = auth.get_user_by_login(app_db, auth.DEMO_STUDENT)
+    assert "Для учителя" not in _texts(run_app("practice", student))
+    teacher = auth.get_user_by_login(app_db, auth.DEMO_TEACHER)
+    assert "Для учителя" in _texts(run_app("practice", teacher))

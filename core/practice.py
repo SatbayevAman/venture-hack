@@ -22,7 +22,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from typing import Optional
 
-from . import db, portrait, tags as T
+from . import consent, db, portrait, tags as T
 from .checker import check_problem, normalize
 
 SCHEMA = """
@@ -84,6 +84,13 @@ REVIEW_DAYS = (2, 5)     # задача, решённая только с при
 
 def ensure_schema(conn) -> None:
     conn.executescript(SCHEMA)
+
+
+def can_practice(conn, student_id: int) -> bool:
+    """Гейт тренажёра: строки решений и исходы пишутся в базу только при активном согласии —
+    то же условие, что для записи живой работы (consent.required_ok). Синтетическим ученикам
+    демо согласие ставится автоматически."""
+    return consent.required_ok(conn, student_id)
 
 
 # ======================================================================
