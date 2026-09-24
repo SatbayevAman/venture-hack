@@ -30,23 +30,85 @@
 
 ## Как запустить
 
-Коротко, если Python уже стоит:
+Коротко, **Windows** (PowerShell, Python и Git ставятся через `winget`):
+
+```powershell
+winget install -e --id Python.Python.3.13
+winget install -e --id Git.Git
+# закройте PowerShell и откройте заново, чтобы появились команды py и git
+git clone https://github.com/SatbayevAman/venture-hack.git
+cd venture-hack
+py -3.13 -m venv .venv
+Set-ExecutionPolicy -Scope Process RemoteSigned   # разрешить скрипт активации в этом окне
+.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m streamlit run app.py                     # затем открыть http://localhost:8501
+```
+
+Коротко, **macOS и Linux** (если Python 3.10+ уже стоит):
 
 ```bash
 git clone https://github.com/SatbayevAman/venture-hack.git && cd venture-hack
-python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 streamlit run app.py                                    # затем открыть http://localhost:8501
 ```
 
-Дальше — то же самое по шагам, с настройками и частыми проблемами.
+Дальше — то же самое по шагам, с настройками и частыми проблемами. Команды для Windows даны для **PowerShell**: откройте меню «Пуск», наберите `PowerShell` и запустите «Windows PowerShell» (или «Терминал»). Администратором запускать не нужно.
 
 ### Что нужно
 
-- **Python 3.10–3.13.** Проверено на 3.10, 3.11 и 3.13: проходят все тесты. Python 3.9 не подходит. Нужен Streamlit 1.51 или новее, а он работает только на Python 3.10+. На 3.9 `pip install` остановится с ошибкой «No matching distribution found for streamlit>=1.51». Версию проверяет `python --version` (Windows: `py --version`).
+- **Python 3.10–3.13.** Проверено на 3.10, 3.11 и 3.13: проходят все тесты. Python 3.9 не подходит. Нужен Streamlit 1.51 или новее, а он работает только на Python 3.10+. На 3.9 `pip install` остановится с ошибкой «No matching distribution found for streamlit>=1.51». Как поставить — шаг 0.
 - **Около 450 МБ** на диске — под виртуальное окружение.
 - **Интернет** — только для установки пакетов и, по желанию, для языковой модели. Без ключа модели приложение работает полностью.
 - **Любой современный браузер.**
+
+### Шаг 0. Установить Python (и Git)
+
+#### Windows: через winget
+
+`winget` — встроенный менеджер пакетов Windows 10 (1809 и новее) и Windows 11. Проверьте, что он есть:
+
+```powershell
+winget --version
+```
+
+Если команда не найдена — установите или обновите «Установщик приложений» (App Installer) из Microsoft Store и откройте PowerShell заново.
+
+Установите Python 3.13:
+
+```powershell
+winget install -e --id Python.Python.3.13
+```
+
+- При первом запуске winget спросит, принимаете ли вы условия источника, — ответьте `Y`.
+- Windows может запросить разрешение на изменения (окно UAC) — согласитесь: так ставится лаунчер `py`.
+
+**Закройте PowerShell и откройте новое окно** — только в новом окне появятся свежие команды. Проверьте:
+
+```powershell
+py --version          # Python 3.13.x
+py --list             # все установленные версии Python
+```
+
+На Windows пользуйтесь командой **`py`**, а не `python`, пока не активировано окружение (шаг 2). Установщик с python.org не всегда добавляет `python` в `PATH`, и тогда слово `python` открывает Microsoft Store или пишет «Python не найден». Лаунчер `py` работает в любом случае. После активации окружения `python` и `pip` указывают на Python из `.venv`.
+
+Git нужен для `git clone` (шаг 1). Если не хотите его ставить, скачайте проект ZIP-архивом.
+
+```powershell
+winget install -e --id Git.Git
+```
+
+После установки Git тоже откройте PowerShell заново и проверьте `git --version`.
+
+**Без winget:** скачайте установщик Python 3.13 с [python.org/downloads/windows](https://www.python.org/downloads/windows/) и на первом экране отметьте **«Add python.exe to PATH»**. Git — с [git-scm.com/download/win](https://git-scm.com/download/win).
+
+#### macOS и Linux
+
+- macOS: `brew install python@3.13` (через [Homebrew](https://brew.sh)) или установщик с python.org.
+- Ubuntu/Debian: `sudo apt install python3 python3-venv python3-pip git`. Если в системе Python старше 3.10, поставьте новее, например через `pyenv`.
+
+Проверка — `python3 --version`.
 
 ### Шаг 1. Скачать проект
 
@@ -55,45 +117,59 @@ git clone https://github.com/SatbayevAman/venture-hack.git
 cd venture-hack
 ```
 
-Без git: на GitHub нажмите **Code → Download ZIP**, распакуйте архив и откройте терминал в папке `venture-hack-main`.
+Без git: на GitHub нажмите **Code → Download ZIP**, распакуйте архив и откройте терминал в папке `venture-hack-main`. На Windows: откройте папку в Проводнике, щёлкните по адресной строке, наберите `powershell` и нажмите Enter — PowerShell откроется сразу в этой папке.
 
 ### Шаг 2. Создать виртуальное окружение
 
-Окружение держит пакеты проекта отдельно от системного Python. Создайте его один раз:
+Окружение держит пакеты проекта отдельно от системного Python. Создайте его один раз, находясь в папке проекта:
 
-```bash
-python -m venv .venv            # Windows с несколькими версиями: py -3.11 -m venv .venv
-```
+| Система | Команда |
+|---|---|
+| Windows | `py -3.13 -m venv .venv` (или `py -3.11 …` — любая версия 3.10–3.13 из `py --list`) |
+| macOS, Linux | `python3 -m venv .venv` |
 
 Активируйте окружение в каждом новом окне терминала:
 
 | Система | Команда |
 |---|---|
-| Windows, cmd | `.venv\Scripts\activate` |
 | Windows, PowerShell | `.venv\Scripts\Activate.ps1` |
+| Windows, cmd | `.venv\Scripts\activate.bat` |
 | macOS, Linux | `source .venv/bin/activate` |
 
 Если окружение активно, в начале строки терминала стоит `(.venv)`.
 
-PowerShell может запретить запуск скрипта активации. Тогда один раз выполните `Set-ExecutionPolicy -Scope Process RemoteSigned` и повторите активацию.
+PowerShell по умолчанию запрещает запуск скриптов, и активация падает с ошибкой «…Activate.ps1 не может быть загружен, так как выполнение сценариев отключено в этой системе». Тогда выполните в том же окне
+
+```powershell
+Set-ExecutionPolicy -Scope Process RemoteSigned
+```
+
+и повторите активацию. Настройка действует только на это окно. Чтобы не вводить её каждый раз, один раз выполните `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+
+Можно обойтись и без активации: вызывайте Python окружения напрямую — `.venv\Scripts\python -m pip install -r requirements.txt` и `.venv\Scripts\python -m streamlit run app.py`.
 
 ### Шаг 3. Установить зависимости
 
+С активным окружением:
+
 ```bash
-pip install -r requirements.txt
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 ```
 
 Ставятся Streamlit (вместе с ним — Altair и numpy), SymPy, pandas, requests и Pillow. Обычно это занимает 1–3 минуты.
 
-Необязательно — фото с iPhone в формате HEIC: `pip install pillow-heif`. Без этого пакета принимаются jpg, png и webp.
+Необязательно — фото с iPhone в формате HEIC: `python -m pip install pillow-heif`. Без этого пакета принимаются jpg, png и webp.
 
 ### Шаг 4. Запустить сервер
 
 ```bash
-streamlit run app.py
+python -m streamlit run app.py
 ```
 
-Если терминал не знает команду `streamlit`, запустите так: `python -m streamlit run app.py`.
+Короткая форма `streamlit run app.py` тоже работает, если окружение активно.
+
+При первом запуске на Windows брандмауэр может спросить, разрешить ли Python доступ к сети. Для работы на своём компьютере достаточно нажать «Отмена» — `localhost` открывается и так. Разрешите доступ для частных сетей, если хотите открыть приложение с телефона (см. «Открыть с другого устройства»).
 
 В терминале появятся адреса:
 
@@ -109,6 +185,8 @@ streamlit run app.py
 При первом открытии создаётся база `data/portret.db`: синтетическая история класса прогоняется через проверку SymPy. Это занимает около 5–10 секунд, на экране — «Первый запуск: прогоняю синтетическую историю класса через проверку…». Следующие запуски открываются сразу.
 
 Сервер работает, пока открыт терминал. Остановка — `Ctrl+C`. База остаётся в `data/portret.db`: после нового запуска все работы, отметки и аккаунты на месте.
+
+**Следующие запуски на Windows:** откройте PowerShell в папке проекта и выполните `.venv\Scripts\Activate.ps1`, затем `python -m streamlit run app.py`. Устанавливать заново ничего не нужно.
 
 ### Шаг 5. Войти
 
@@ -216,8 +294,12 @@ streamlit run app.py --server.address 0.0.0.0 --server.port 8501
 
 | Что видно | Что сделать |
 |---|---|
+| Windows: `winget` «не является внутренней или внешней командой» | установите или обновите «Установщик приложений» (App Installer) из Microsoft Store либо поставьте Python установщиком с python.org (шаг 0) |
+| Windows: `py`, `python` или `git` не находятся сразу после `winget install` | закройте PowerShell и откройте новое окно — `PATH` обновляется только в новых окнах |
+| Windows: `python` открывает Microsoft Store или пишет «Python не найден» | до активации окружения используйте `py` вместо `python`. Или отключите заглушки: «Параметры → Приложения → Дополнительные параметры приложений → Псевдонимы выполнения приложений» — выключите `python.exe` и `python3.exe` |
 | `streamlit: command not found` / «не является внутренней или внешней командой» | активируйте окружение (шаг 2) или запустите `python -m streamlit run app.py` |
-| PowerShell не даёт выполнить `Activate.ps1` | `Set-ExecutionPolicy -Scope Process RemoteSigned`, затем снова активировать |
+| PowerShell не даёт выполнить `Activate.ps1` («выполнение сценариев отключено») | `Set-ExecutionPolicy -Scope Process RemoteSigned`, затем снова активировать; или без активации: `.venv\Scripts\python -m streamlit run app.py` |
+| `No matching distribution found for streamlit>=1.51` | окружение создано на Python 3.9 или старше: удалите папку `.venv` и создайте заново — `py -3.13 -m venv .venv` (Windows) |
 | Адрес не `:8501`, а `:8502` или `Port … is already in use` | порт занят — часто приложение уже запущено в другом окне. Откройте `Local URL` из терминала или остановите прежний сервер; свой порт — `--server.port 8502` |
 | Браузер не открылся | так задумано (`headless`) — откройте http://localhost:8501 вручную |
 | В портрете ошибка `altair_chart() got an unexpected keyword argument 'height'` | в окружении остался Streamlit старее 1.51 (например, из прежней установки): `pip install -U -r requirements.txt` (нужен Python 3.10+) |
