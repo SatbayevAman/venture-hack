@@ -544,7 +544,8 @@ class LineResult:
     no: int
     raw: str
     norm: str = ""
-    kind: str = "text"       # eq | eqs | root | disc | vieta | numeric | answer | domain | rejected | check | expr | text | unparsed
+    kind: str = "text"       # eq | eqs | root | disc | vieta | numeric | answer | domain | rejected | check | expr | text | unparsed;
+    #                          виды core/kinds: ineq | interval | signs (неравенства), system | point (системы), subst (биквадратные)
     status: str = "info"     # ok | error | after | info | unparsed
     note: str = ""
     values: list = field(default_factory=list)
@@ -552,7 +553,7 @@ class LineResult:
 
 @dataclass
 class CheckResult:
-    kind: str                     # equation | expression
+    kind: str                     # equation | expression | виды core/kinds: inequality | system | biquadratic
     lines: list
     first_error: Optional[dict]
     methods: list
