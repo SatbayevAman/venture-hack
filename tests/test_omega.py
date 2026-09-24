@@ -1,4 +1,6 @@
 """Стыки после слияния шести направлений (агент Омега, пункты O1–O15 из agents/OMEGA.md)."""
+from __future__ import annotations
+
 import time
 from pathlib import Path
 
