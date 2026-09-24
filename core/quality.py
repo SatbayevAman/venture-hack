@@ -43,25 +43,36 @@ def ensure_schema(conn) -> None:
             conn.execute(stmt)
 
 
+def _only(col: str, student_ids) -> tuple[str, list]:
+    """Условие видимости « AND col IN (…)»; student_ids=None — все ученики (администратор)."""
+    if student_ids is None:
+        return "", []
+    ids = sorted(student_ids)
+    return f" AND {col} IN ({','.join('?' * len(ids)) or 'NULL'})", ids
+
+
 # ---------------------------------------------------------------- 1. точность тегов
 
-def _reviewed(conn, source: str) -> list:
-    """Наблюдения источника source с последней отметкой: [(observation, review)]."""
+def _reviewed(conn, source: str, student_ids=None) -> list:
+    """Наблюдения источника source с последней отметкой: [(observation, review)].
+    student_ids — фильтр видимости (учитель видит только свои классы); None — все ученики."""
     review.ensure_schema(conn)
+    vis, args = _only("o.student_id", student_ids)
     rows = db.q(conn, """SELECT o.*, r.verdict, r.new_tag, r.comment AS review_comment, r.reviewer,
                                 r.created_at AS reviewed_at, s.source AS sub_source
                          FROM observations o JOIN reviews r ON r.observation_id = o.id
                          LEFT JOIN submissions s ON s.id = o.submission_id
-                         WHERE o.source=? AND r.id = (SELECT MAX(id) FROM reviews WHERE observation_id = o.id)""",
-                (source,))
+                         WHERE o.source=? AND r.id = (SELECT MAX(id) FROM reviews WHERE observation_id = o.id)""" + vis,
+                (source, *args))
     return [dict(r) for r in rows]
 
 
-def tag_precision(conn, source: str = "auto") -> list[dict]:
+def tag_precision(conn, source: str = "auto", student_ids=None) -> list[dict]:
     """По каждому тегу с отметками: отмечено, верно, неверно, другой тег, точность, частая замена, статус."""
-    totals = Counter(r["tag"] for r in db.q(conn, "SELECT tag FROM observations WHERE source=?", (source,)))
+    vis, args = _only("student_id", student_ids)
+    totals = Counter(r["tag"] for r in db.q(conn, "SELECT tag FROM observations WHERE source=?" + vis, (source, *args)))
     by_tag: dict = {}
-    for r in _reviewed(conn, source):
+    for r in _reviewed(conn, source, student_ids):
         by_tag.setdefault(r["tag"], []).append(r)
     out = []
     for tag, items in by_tag.items():
@@ -80,8 +91,8 @@ def tag_precision(conn, source: str = "auto") -> list[dict]:
     return out
 
 
-def tag_status(conn, tag: str, source: str = "auto") -> Optional[dict]:
-    return next((d for d in tag_precision(conn, source) if d["tag"] == tag), None)
+def tag_status(conn, tag: str, source: str = "auto", student_ids=None) -> Optional[dict]:
+    return next((d for d in tag_precision(conn, source, student_ids) if d["tag"] == tag), None)
 
 
 def overall_precision(rows: list[dict]) -> Optional[dict]:
@@ -94,9 +105,9 @@ def overall_precision(rows: list[dict]) -> Optional[dict]:
 
 # ---------------------------------------------------------------- кандидаты на исправление правил
 
-def rejected_cases(conn, tags: Optional[list] = None, source: str = "auto") -> list[dict]:
+def rejected_cases(conn, tags: Optional[list] = None, source: str = "auto", student_ids=None) -> list[dict]:
     """Отклонённые и перетегированные наблюдения с доказательствами — материал для доработки правил."""
-    rows = [r for r in _reviewed(conn, source) if r["verdict"] in ("reject", "retag")
+    rows = [r for r in _reviewed(conn, source, student_ids) if r["verdict"] in ("reject", "retag")
             and (tags is None or r["tag"] in tags)]
     if not rows:
         return []
@@ -113,15 +124,15 @@ def rejected_cases(conn, tags: Optional[list] = None, source: str = "auto") -> l
     return out
 
 
-def candidates_markdown(conn, lang: str = "ru", tags: Optional[list] = None) -> str:
+def candidates_markdown(conn, lang: str = "ru", tags: Optional[list] = None, student_ids=None) -> str:
     """Markdown: по тегу — отклонённые случаи (работа, задача, строка, цитата, комментарий учителя)."""
     ru = lang != "kk"
-    cases = rejected_cases(conn, tags)
+    cases = rejected_cases(conn, tags, student_ids=student_ids)
     lines = ["# " + ("Кандидаты на исправление правил" if ru else "Ережелерді түзетуге үміткерлер"), ""]
     if not cases:
         lines.append("Отклонённых выводов нет." if ru else "Қабылданбаған қорытынды жоқ.")
         return "\n".join(lines) + "\n"
-    stats = {d["tag"]: d for d in tag_precision(conn)}
+    stats = {d["tag"]: d for d in tag_precision(conn, student_ids=student_ids)}
     for tag in sorted({c["tag"] for c in cases}):
         d = stats.get(tag)
         head = f"## {T.name(tag, 'ru' if ru else 'kk')} (`{tag}`)"
@@ -217,10 +228,11 @@ def set_manual_minutes(conn, minutes: Optional[float]) -> None:
     set_setting(conn, "manual_minutes_per_work", None if minutes is None else f"{float(minutes):g}")
 
 
-def timing_summary(conn) -> dict:
+def timing_summary(conn, student_ids=None) -> dict:
     """Медиана секунд на работу и число работ; экономия — только если учитель ввёл время ручной проверки."""
     ensure_schema(conn)
-    secs = [r["seconds"] for r in db.q(conn, "SELECT seconds FROM check_timings")]
+    vis, args = _only("student_id", student_ids)
+    secs = [r["seconds"] for r in db.q(conn, "SELECT seconds FROM check_timings WHERE 1=1" + vis, args)]
     med = statistics.median(secs) if secs else None
     manual = manual_minutes(conn)
     saved = speedup = None
@@ -233,35 +245,36 @@ def timing_summary(conn) -> dict:
 
 # ---------------------------------------------------------------- выгрузка для слайда
 
-def metrics_csv(conn) -> str:
+def metrics_csv(conn, student_ids=None) -> str:
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["metric", "tag", "value", "n"])
-    for d in tag_precision(conn):
+    rows = tag_precision(conn, student_ids=student_ids)
+    for d in rows:
         w.writerow(["tag_precision", d["tag"], f"{d['precision']:.3f}", d["reviewed"]])
-    ov = overall_precision(tag_precision(conn))
+    ov = overall_precision(rows)
     if ov:
         w.writerow(["overall_precision", "", f"{ov['precision']:.3f}", ov["reviewed"]])
     ev = eval_accuracy()
     if ev["available"] and ev["n"]:
         w.writerow(["eval_first_error_line", "", f"{ev['ok_line'] / ev['n']:.3f}", ev["n"]])
         w.writerow(["eval_first_error_line_tag", "", f"{ev['ok_tag'] / ev['n']:.3f}", ev["n"]])
-    t = timing_summary(conn)
+    t = timing_summary(conn, student_ids)
     if t["median_seconds"] is not None:
         w.writerow(["check_median_seconds", "", f"{t['median_seconds']:.1f}", t["n"]])
     if t["manual_minutes"] is not None:
         w.writerow(["manual_minutes_per_work", "", f"{t['manual_minutes']:g}", ""])
-    rs = review.rating_summary(conn)
+    rs = review.rating_summary(conn, student_ids)
     if rs["mean"] is not None:
         w.writerow(["portrait_similarity_mean", "", f"{rs['mean']:.2f}", rs["n_students"]])
     return buf.getvalue()
 
 
-def metrics_markdown(conn, lang: str = "ru") -> str:
+def metrics_markdown(conn, lang: str = "ru", student_ids=None) -> str:
     ru = lang != "kk"
     L = (lambda a, b: a) if ru else (lambda a, b: b)
     out = ["# " + L("Качество выводов — цифры для слайда", "Қорытындылар сапасы — слайдқа арналған сандар"), ""]
-    rows = tag_precision(conn)
+    rows = tag_precision(conn, student_ids=student_ids)
     ov = overall_precision(rows)
     out.append("## " + L("Точность правил по отметкам учителя", "Мұғалім белгілері бойынша ережелер дәлдігі"))
     if ov:
@@ -290,7 +303,7 @@ def metrics_markdown(conn, lang: str = "ru") -> str:
     else:
         out.append(L("Нет размеченных работ (eval/labels.csv).", "Белгіленген жұмыс жоқ (eval/labels.csv)."))
     out.append("")
-    t = timing_summary(conn)
+    t = timing_summary(conn, student_ids)
     out.append("## " + L("Время проверки", "Тексеру уақыты"))
     if t["median_seconds"] is not None:
         line = L(f"Медиана {t['median_seconds']:.0f} с на работу (работ: {t['n']})",
@@ -301,7 +314,7 @@ def metrics_markdown(conn, lang: str = "ru") -> str:
         out.append(line + ".")
     else:
         out.append(L("Замеров пока нет.", "Әзірге өлшеу жоқ."))
-    rs = review.rating_summary(conn)
+    rs = review.rating_summary(conn, student_ids)
     if rs["mean"] is not None:
         out += ["", "## " + L("Похожесть портрета", "Портреттің ұқсастығы"),
                 L(f"Средняя оценка {rs['mean']:.1f} из 5 (учеников: {rs['n_students']}, оценок: {rs['n']}).",

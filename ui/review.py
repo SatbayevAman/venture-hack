@@ -92,9 +92,10 @@ def controls(conn, obs_id, L, key: str) -> None:
         st.rerun()
 
 
-def precision_badge(conn, tag: str, L) -> str:
-    """Бейдж «требует проверки», если по отметкам учителя правило для тега часто ошибается."""
-    d = quality.tag_status(conn, tag)
+def precision_badge(conn, tag: str, L, student_ids=None) -> str:
+    """Бейдж «требует проверки», если по отметкам учителя правило для тега часто ошибается.
+    student_ids — те же ученики, что на странице «Качество» у этого пользователя."""
+    d = quality.tag_status(conn, tag, student_ids=student_ids)
     if not d or not d["needs_review"]:
         return ""
     text = L(f"требует проверки: точность {_pct(d['precision'])}, отметок: {d['reviewed']}",
@@ -213,17 +214,18 @@ def rating_form(conn, p: dict, L) -> None:
 
 # ---------------------------------------------------------------- страница «Качество»
 
-def render_quality(conn, L, lang: str, esc) -> None:
+def render_quality(conn, L, lang: str, esc, student_ids=None) -> None:
+    """student_ids — ученики, видимые пользователю (auth.visible_student_ids); None — все."""
     st.title(L("Качество выводов", "Қорытындылар сапасы"))
     st.caption(L("Все цифры — только из отметок учителя и замеров в этом приложении, ничего не оценивается «на глаз». "
                  "Отметки ставятся в доказательствах портрета, на экране проверки после записи и в журнале.",
                  "Барлық сан — тек мұғалім белгілері мен осы қосымшадағы өлшеулерден, ештеңе «көзбен» бағаланбайды. "
                  "Белгілер портрет дәлелдерінде, жазғаннан кейін тексеру экранында және журналда қойылады."))
-    rows = quality.tag_precision(conn)
+    rows = quality.tag_precision(conn, student_ids=student_ids)
     ov = quality.overall_precision(rows)
     ev = quality.eval_accuracy()
-    tm = quality.timing_summary(conn)
-    rs = review.rating_summary(conn)
+    tm = quality.timing_summary(conn, student_ids)
+    rs = review.rating_summary(conn, student_ids)
 
     c = st.columns(4)
     c[0].metric(L("Точность правил по отметкам", "Белгілер бойынша ережелер дәлдігі"),
@@ -256,7 +258,7 @@ def render_quality(conn, L, lang: str, esc) -> None:
                      f"{quality.REVIEWS_MIN} отметках. Меньше отметок — статус не ставится.",
                      f"«Тексеруді қажет етеді» — кемінде {quality.REVIEWS_MIN} белгіде дәлдік "
                      f"{_pct(quality.PRECISION_MIN)}-дан төмен. Белгі аз болса — күй қойылмайды."))
-    trows = quality.tag_precision(conn, "teacher")
+    trows = quality.tag_precision(conn, "teacher", student_ids)
     if trows:
         st.markdown("**" + L("Теги из комментариев учителя (разметка моделью или словарём)",
                              "Мұғалім пікірлеріндегі тегтер (модель не сөздік белгілеген)") + "**")
@@ -268,7 +270,7 @@ def render_quality(conn, L, lang: str, esc) -> None:
     show_all = st.checkbox(L("Показать отклонённые случаи по всем тегам", "Барлық тег бойынша қабылданбаған жағдайларды көрсету"),
                            value=not bad, key="eps_q_all")
     tags = None if show_all else bad
-    cases = quality.rejected_cases(conn, tags) if (show_all or bad) else []
+    cases = quality.rejected_cases(conn, tags, student_ids=student_ids) if (show_all or bad) else []
     if not cases:
         st.caption(L("Нет тегов со статусом «требует проверки» и отклонённых случаев.",
                      "«Тексеруді қажет етеді» күйіндегі тег және қабылданбаған жағдай жоқ."))
@@ -287,7 +289,7 @@ def render_quality(conn, L, lang: str, esc) -> None:
                     st.markdown(f"- **{esc(verdict)}** · {esc(where)} · {esc(x.get('alias'))}: "
                                 f"`{esc(x['evidence'])}`{note}", unsafe_allow_html=True)
         st.download_button(L("Скачать как markdown", "Markdown ретінде жүктеу"),
-                           quality.candidates_markdown(conn, lang, tags).encode("utf-8"),
+                           quality.candidates_markdown(conn, lang, tags, student_ids).encode("utf-8"),
                            "rule_candidates.md", "text/markdown")
 
     # ---- 3. размеченные работы
@@ -357,14 +359,14 @@ def render_quality(conn, L, lang: str, esc) -> None:
 
     # ---- 6. выгрузка
     st.header(L("6. Цифры для слайда", "6. Слайдқа арналған сандар"))
-    md = quality.metrics_markdown(conn, lang)
+    md = quality.metrics_markdown(conn, lang, student_ids)
     with st.expander(L("Предпросмотр", "Алдын ала қарау")):
         st.markdown(md)
     c1, c2 = st.columns(2)
     c1.download_button(L("Скачать метрики (markdown)", "Метрикаларды жүктеу (markdown)"), md.encode("utf-8"),
                        "quality_metrics.md", "text/markdown", use_container_width=True)
     c2.download_button(L("Скачать метрики (CSV)", "Метрикаларды жүктеу (CSV)"),
-                       quality.metrics_csv(conn).encode("utf-8-sig"), "quality_metrics.csv", "text/csv",
+                       quality.metrics_csv(conn, student_ids).encode("utf-8-sig"), "quality_metrics.csv", "text/csv",
                        use_container_width=True)
 
 

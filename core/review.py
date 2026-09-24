@@ -174,9 +174,10 @@ def ratings(conn, student_id: Optional[int] = None) -> list:
     return [dict(r, wrong_items=json.loads(r["wrong_items"] or "[]")) for r in rows]
 
 
-def rating_summary(conn) -> dict:
-    """Среднее по последней оценке каждого ученика, число оценок и чаще всего неверные пункты."""
-    rows = ratings(conn)
+def rating_summary(conn, student_ids=None) -> dict:
+    """Среднее по последней оценке каждого ученика, число оценок и чаще всего неверные пункты.
+    student_ids — фильтр видимости; None — все ученики."""
+    rows = [r for r in ratings(conn) if student_ids is None or r["student_id"] in student_ids]
     last = {}
     for r in rows:
         last[r["student_id"]] = r

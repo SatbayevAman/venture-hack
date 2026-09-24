@@ -445,7 +445,7 @@ def portrait_teacher(p: dict):
         badges = badge(L("слабое место", "әлсіз тұс"), "b-weak")
         if e["confirmed"]:
             badges += badge(L("подтверждено дважды: работы + учитель", "екі рет расталды: жұмыс + мұғалім"), "b-conf")
-        badges += review_view.precision_badge(conn, e["tag"], L)
+        badges += review_view.precision_badge(conn, e["tag"], L, auth.visible_student_ids(conn, user))
         det = f" ({esc(e['detail'])})" if e["detail"] else ""
         st.markdown(f'<div class="card"><h4>{esc(t)} · {esc(T.skill_name(e["skill"], lang).lower())} {badges}</h4>'
                     f'{esc(portrait.share_text(e["count"], e["total"], lang))}{det}. '
@@ -991,7 +991,7 @@ digraph G { rankdir=LR; node [shape=box, style="rounded,filled", fillcolor="#eef
 
 
 {"class": page_class, "portrait": page_portrait, "check": page_check, "log": page_log,
- "quality": lambda: review_view.render_quality(conn, L, lang, esc),
+ "quality": lambda: review_view.render_quality(conn, L, lang, esc, student_ids=auth.visible_student_ids(conn, user)),
  "manage": lambda: manage_view.render(conn, user, L, lang),
  "practice": lambda: practice_view.render(conn, L, lang, esc, badge, render_lines, students), "about": page_about}[page]()
 ss["_last_lang"] = lang
