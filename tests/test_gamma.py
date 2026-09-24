@@ -355,16 +355,31 @@ def test_new_tags_in_dictionary():
 
 
 def test_optional_topics_only_when_tag_exists(monkeypatch):
-    """Новые темы Беты: шаблоны появляются только вместе с тегом и только если проверка их принимает."""
-    monkeypatch.setattr(practice, "FAMILIES", dict(practice.FAMILIES))
-    monkeypatch.setattr(practice, "_USABLE", {})
+    """Темы Беты: шаблоны появляются только вместе с тегом."""
+    monkeypatch.setattr(practice, "FAMILIES", {k: v for k, v in practice.FAMILIES.items()
+                                               if k not in ("ineq_flip", "boundary")})
+    for tag in ("ineq_flip", "boundary"):
+        if tag in T.TAGS:
+            monkeypatch.delitem(T.TAGS, tag)
     practice.register_optional_topics()
-    assert "ineq_flip" not in practice.FAMILIES
-    monkeypatch.setitem(T.TAGS, "ineq_flip", {"kind": "error", "ru": "Знак неравенства", "kk": "Теңсіздік таңбасы"})
-    practice.register_optional_topics()
-    assert "ineq_flip" in practice.FAMILIES
-    assert hints.rule("ineq_flip", "kk") == hints.RULES["ineq_flip"]["kk"]
-    # эталон уходит в check_problem; пока проверка не знает неравенств, задачи отбрасываются, а не ломаются
-    items = practice.generate("ineq_flip", None, n=2, seed=1)
-    assert all(practice.self_check(i) for i in items)
-    assert practice.usable("ineq_flip") == bool(items)
+    assert "ineq_flip" not in practice.FAMILIES and "boundary" not in practice.FAMILIES
+
+
+@pytest.mark.skipif("ineq_flip" not in T.TAGS, reason="неравенства (агент Бета) не подключены")
+def test_inequality_practice_with_beta_checker():
+    """После слияния с Бетой: задачи на ineq_flip проходят её проверку, подсказки не называют ответ."""
+    assert practice.usable("ineq_flip")
+    items = practice.generate("ineq_flip", None, n=4, seed=1)
+    assert len(items) == 4 and all(i["kind"] == "inequality" and practice.self_check(i) for i in items)
+    it = items[0]
+    wrong = it["reference"][:-1] + [it["reference"][-1].translate(str.maketrans("<>≤≥", "><≥≤"))]
+    fe = check_problem(it["kind"], it["statement"], wrong, len(it["reference"])).first_error
+    assert fe and fe["tag"] == "ineq_flip"
+    for lang in ("ru", "kk"):
+        for level in (1, 2):
+            text = hints.hint(fe, level, lang, it["statement"], it["skill"])
+            assert text and it["answer"] not in text.replace("-", "−")
+    ex = hints.example(fe, it["statement"], it["skill"])
+    assert ex["kind"] == "inequality" and practice._key(ex["statement"]) != practice._key(it["statement"])
+    # другие теги неравенств — тоже пример-неравенство, а не смешанный набор
+    assert hints.example({"tag": "ineq_div_var", "line": 1}, it["statement"], it["skill"])["kind"] == "inequality"

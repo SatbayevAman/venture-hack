@@ -349,6 +349,9 @@ def register_optional_topics() -> None:
     for tag in ("ineq_flip", "boundary"):
         if tag in T.TAGS and tag not in FAMILIES:
             FAMILIES[tag] = [(tag, t_ineq_flip)]
+    ineq = next((sk for sk in T.SKILLS if "ineq" in sk), None)
+    if ineq and "ineq_flip" in FAMILIES:  # прочие теги неравенств (ineq_div_var, …) — пример-неравенство
+        DEFAULT_FOR_SKILL.setdefault(ineq, "ineq_flip")
 
 
 # если у тега нет своих шаблонов (новые темы) — берём задачи того же навыка
