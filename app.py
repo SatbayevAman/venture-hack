@@ -19,6 +19,7 @@ from core import tags as T
 from core.tags import question_for, tag_comment_keywords
 from ui import dynamics as dynamics_view
 from ui import login as login_view, manage as manage_view
+from ui import practice as practice_view
 from ui import review as review_view
 
 ROOT = Path(__file__).parent
@@ -99,7 +100,7 @@ def reset_demo():
 
 if "lang" not in ss:
     ss["lang"] = "ru"
-PAGES = ["class", "portrait", "check", "log", "quality", "manage", "about"]
+PAGES = ["class", "portrait", "check", "log", "quality", "manage", "practice", "about"]
 
 lang = ss["lang"]  # значение радиокнопки уже в session_state до её отрисовки
 
@@ -142,6 +143,7 @@ PAGE_NAMES = {
     "log": L("📒 Журнал наблюдений", "📒 Бақылау журналы"),
     "quality": L("📈 Качество", "📈 Сапа"),
     "manage": L("🛡️ Управление", "🛡️ Басқару"),
+    "practice": L("🧩 Тренажёр", "🧩 Жаттықтырғыш"),
     "about": L("⚙️ Как это работает", "⚙️ Бұл қалай жұмыс істейді"),
 }
 
@@ -486,6 +488,7 @@ def portrait_teacher(p: dict):
             for s in p["strengths"]))
 
     # 3. Что пишет учитель
+    practice_view.render_portrait_block(conn, p["student"]["id"], L, lang)
     st.header(L("3. Что пишет учитель", "3. Мұғалім не жазады"))
     if not p["teacher"]:
         st.caption(L("Комментариев пока нет.", "Әзірге пікір жоқ."))
@@ -581,6 +584,8 @@ def portrait_student(p: dict):
                    f'<code>{esc(ex["evidence"])}</code></div>') if ex else ""
         st.markdown(f'<div class="card"><h4>{i + 1}. {esc(r["title"])}</h4>{esc(r["student"])}{example}</div>',
                     unsafe_allow_html=True)
+    if st.button(L("🧩 Потренироваться", "🧩 Жаттығу"), type="primary"):
+        go("practice", p["student"]["id"])
     st.caption(L("Это не оценка, а подсказка, над чем поработать. Каждый пункт опирается на твои работы.",
                  "Бұл баға емес, неге көңіл бөлу керегі туралы кеңес. Әр тармақ сенің жұмыстарыңа негізделген."))
 
@@ -987,5 +992,6 @@ digraph G { rankdir=LR; node [shape=box, style="rounded,filled", fillcolor="#eef
 
 {"class": page_class, "portrait": page_portrait, "check": page_check, "log": page_log,
  "quality": lambda: review_view.render_quality(conn, L, lang, esc),
- "manage": lambda: manage_view.render(conn, user, L, lang), "about": page_about}[page]()
+ "manage": lambda: manage_view.render(conn, user, L, lang),
+ "practice": lambda: practice_view.render(conn, L, lang, esc, badge, render_lines, students), "about": page_about}[page]()
 ss["_last_lang"] = lang
