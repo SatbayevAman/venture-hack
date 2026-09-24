@@ -263,7 +263,7 @@ def ref_label(r: dict) -> str:
 def show_ref_work(r: dict):
     """Показать строки той задачи, на которую ссылается вывод портрета."""
     if not r.get("sub_id") or not r.get("problem_idx"):
-        st.markdown(f"- {esc(ref_label(r))}: `{esc(r.get('evidence'))}`")
+        st.markdown(f"- {esc(ref_label(r))}: <code>{esc(r.get('evidence'))}</code>", unsafe_allow_html=True)
         return
     prob = db.q1(conn, """SELECT p.* FROM problems p JOIN submissions s ON s.assignment_id = p.assignment_id
                           WHERE s.id=? AND p.idx=?""", (r["sub_id"], r["problem_idx"]))

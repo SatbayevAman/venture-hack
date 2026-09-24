@@ -146,7 +146,7 @@ def submission_controls(conn, sub_id, L) -> None:
                        "✓ ✗ Тексеру қорытындыларын белгілеңіз — портрет қайта есептеледі"), expanded=True):
         for o in errs:
             where = L(f"№{o['problem_idx']}, строка {o['line_no']}", f"№{o['problem_idx']}, {o['line_no']}-жол")
-            st.markdown(f"**{_e(where)}: {_e(T.name(o['tag'], lang))}** — `{_e(o['evidence'])}`",
+            st.markdown(f"**{_e(where)}: {_e(T.name(o['tag'], lang))}** — <code>{_e(o['evidence'])}</code>",
                         unsafe_allow_html=True)
             controls(conn, o["id"], L, key=f"eps_sub_{o['id']}")
         if tchr:
@@ -166,7 +166,7 @@ def log_marks(conn, ids, L) -> dict:
 def log_controls(conn, row, L) -> None:
     """Отметка выбранной строки журнала."""
     lang = _lang(L)
-    st.markdown(f"**{_e(row['alias'])} · {_e(T.name(row['tag'], lang))}** — `{_e(row['evidence'])}`",
+    st.markdown(f"**{_e(row['alias'])} · {_e(T.name(row['tag'], lang))}** — <code>{_e(row['evidence'])}</code>",
                 unsafe_allow_html=True)
     if row["source"] not in ("auto", "teacher"):
         st.caption(L("Отметки ставятся на выводы автопроверки и теги из комментариев.",
@@ -287,7 +287,7 @@ def render_quality(conn, L, lang: str, esc, student_ids=None) -> None:
                         L("↻ другой тег: ", "↻ басқа тег: ") + T.name(x["new_tag"], lang)
                     note = f" — «{esc(x['review_comment'])}»" if x.get("review_comment") else ""
                     st.markdown(f"- **{esc(verdict)}** · {esc(where)} · {esc(x.get('alias'))}: "
-                                f"`{esc(x['evidence'])}`{note}", unsafe_allow_html=True)
+                                f"<code>{esc(x['evidence'])}</code>{note}", unsafe_allow_html=True)
         st.download_button(L("Скачать как markdown", "Markdown ретінде жүктеу"),
                            quality.candidates_markdown(conn, lang, tags, student_ids).encode("utf-8"),
                            "rule_candidates.md", "text/markdown")

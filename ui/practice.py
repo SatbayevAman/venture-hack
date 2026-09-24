@@ -413,6 +413,7 @@ def render_portrait_block(conn, student_id: int, L, lang):
         with st.expander(L(f"Доказательства из журнала ({len(s['refs'])})", f"Журналдағы дәлелдер ({len(s['refs'])})")):
             for r in s["refs"][:12]:
                 st.markdown(f"- {esc(r['created_at'][:16])} · **{esc(T.name(r['tag'], lang))}** · "
-                            + L(f"ступень {r['hint_level']}", f"{r['hint_level']}-саты") + f" — `{esc(r['evidence'])}`")
+                            + L(f"ступень {r['hint_level']}", f"{r['hint_level']}-саты") + f" — <code>{esc(r['evidence'])}</code>",
+                            unsafe_allow_html=True)
     st.caption(L("Источник — журнал наблюдений (source = practice). В числа портрета выше тренировки не входят.",
                  "Дереккөзі — бақылау журналы (source = practice). Жаттығулар жоғарыдағы портрет сандарына кірмейді."))

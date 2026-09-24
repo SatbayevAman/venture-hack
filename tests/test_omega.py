@@ -221,3 +221,15 @@ def test_practice_class_block_hidden_for_student(app_db):
     assert "Для учителя" not in _texts(run_app("practice", student))
     teacher = auth.get_user_by_login(app_db, auth.DEMO_TEACHER)
     assert "Для учителя" in _texts(run_app("practice", teacher))
+
+
+# ---------------------------------------------------------------- O4. «<» и «>» в доказательствах
+
+def test_no_escaped_text_inside_code_spans():
+    """В code span Markdown сущности не раскрываются: «x &lt; −2» вместо «x < −2». Только <code>{esc(…)}</code>."""
+    import re
+    bad = re.compile(r"`\{(esc|_e|_esc)\(")
+    files = [ROOT / "app.py", *sorted((ROOT / "ui").glob("*.py"))]
+    hits = [f"{f.name}:{i}" for f in files for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1)
+            if bad.search(line)]
+    assert hits == []
