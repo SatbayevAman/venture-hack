@@ -341,7 +341,7 @@ def test_score_lines_new_topics(kind, text):
 
 def test_score_lines_kind_still_flags_garbage():
     from core import ocr
-    for kind, text in [("inequality", "x < −3 + ("), ("system", "x + = 3"), ("biquadratic", "x² = (4")]:
+    for kind, text in [("inequality", "x < −3 + ("), ("system", "x + = 3"), ("biquadratic", "x = (4")]:
         assert "unparsable" in ocr.score_lines([text], kind)[0]["flags"]
     # без вида и для equation/expression — прежний общий разбор
     assert ocr.score_lines(["x ∈ [−2; 3]"])[0]["flags"] == ["unparsable"]
@@ -358,6 +358,16 @@ def test_parses_agrees_with_check_on_extra_assignments():
                 for lr in check_problem(kind, st, lines, len(ref), ans).lines:
                     flagged = "unparsable" in ocr.score_line(lr.raw, kind)["flags"]
                     assert flagged == (lr.status == "unparsed"), (kind, lr.raw)
+
+
+@pytest.mark.parametrize("line", ["x² = −3 — корней нет", "x² = 1, x² = −3", "t1 = 1, t2 = −3", "t₁ = 1, t₂ = −3",
+                                  "x = ±1", "x = (4", "t² + 2t − = 0", "x² = (4"])
+def test_biquadratic_parses_agrees_with_check_in_context(line):
+    """Строка после замены: parses совпадает с тем, как её разбирает check (в том числе «x² = −3 — корней нет»)."""
+    from core import ocr
+    from core.checker import check_problem
+    lr = check_problem("biquadratic", "x⁴ + 2x² − 3 = 0", ["Пусть x² = t, t ≥ 0", "t² + 2t − 3 = 0", line]).lines[-1]
+    assert ("unparsable" in ocr.score_line(line, "biquadratic")["flags"]) == (lr.status == "unparsed")
 
 
 def test_unverified_swap_line_not_downgraded():
@@ -380,6 +390,7 @@ def test_unverified_swap_line_not_downgraded():
     (r"(-\infty; -1) \cup [3; +\infty)", "(-∞; -1) ∪ [3; +∞)"),
     (r"\{ x + y = 5", "x + y = 5"),
     (r"\{(3; 2)\}", "(3; 2)"),
+    (r"(-\infty; -1]\cup\{3\}", "(-∞; -1]∪ 3"),  # \{ сразу после \cup не склеивает «\cup3»
 ])
 def test_clean_text_new_latex(raw, want):
     from core import ocr
@@ -662,3 +673,18 @@ def test_readme_demo_scenario(app_db):
     assert review.latest(app_db, ids) == {}
     assert _lost_root(portrait.build(app_db, sid)) == (5, 7)
     assert dangling(app_db) == []
+
+
+def test_quality_page_counts_drafts(app_db, tmp_path, monkeypatch):
+    import csv
+    import evaluate
+    path = tmp_path / "labels.csv"
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=evaluate.FIELDS)
+        w.writeheader()
+        w.writerow({"kind": "equation", "statement": "x² = 7x", "lines": "x = 7", "error_line": "1", "status": "draft"})
+    monkeypatch.setattr(quality, "LABELS", path)
+    monkeypatch.setattr(quality.eval_accuracy, "__defaults__", (path,))
+    teacher = auth.get_user_by_login(app_db, auth.DEMO_TEACHER)
+    text = _texts(run_app("quality", teacher))
+    assert "только черновики (1)" in text and "нет строк" not in text

@@ -755,7 +755,8 @@ def page_check():
                             for (_, row), l in zip(loose_df.iterrows(), loose):
                                 if row["to"] == f"№{p['idx']}" and _cell(row["text"]):
                                     texts.append(_cell(row["text"]))
-                                    new_raw[p["id"]].append(l)  # строка из распознавания — для учёта правок
+                                    # строка из распознавания — для учёта правок; уверенность — по виду задачи, куда её отнесли
+                                    new_raw[p["id"]].append(ocr.score_line(l, p["kind"]))
                         ss[f"lines_{aid}_{p['id']}"] = "\n".join(texts)
                     ss["ocr_raw"] = new_raw  # + строки без задачи, которые учитель отнёс к задаче
                     ss["ocr_accepted"] = True

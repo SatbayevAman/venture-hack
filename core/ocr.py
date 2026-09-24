@@ -97,7 +97,8 @@ def clean_text(text: str) -> str:
     встречается в ответах vision-моделей: обрывки LaTeX и лишние пробелы."""
     s = str(text or "")
     s = s.replace("$", "")
-    s = s.replace("\\{", "").replace("\\}", "")  # скобки множества и системы: иначе остаётся «\ »
+    # скобки множества и системы: иначе остаётся «\ »; пробел, а не пусто — чтобы «\cup\{3\}» не склеилось в «\cup3»
+    s = s.replace("\\{", " ").replace("\\}", " ")
     # \text{Ответ}: → Ответ:, \mathrm{D} → D
     s = re.sub(r"\\(?:text|mathrm|mbox|textbf)\s*\{([^{}]*)\}", r"\1", s)
     s = _frac_sqrt(s)

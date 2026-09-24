@@ -76,24 +76,32 @@ def _segment(raw_lines: list, keep: set) -> list:
     return [raw if i in keep else "" for i, raw in enumerate(raw_lines, start=1)]
 
 
-_T_INDEXED = re.compile(r"(?<![A-Za-z])([a-wzA-Z])\s*(?:[₁₂]|_\s*[12](?![0-9]))")
+_T_INDEXED = re.compile(r"(?<![A-Za-z])([a-wzA-Z])\s*(?:[₁₂]|_?\s*[12](?![0-9]))")
+_OTHER_VAR = re.compile(r"(?<![A-Za-z])[a-wzA-Z](?![A-Za-z])")
 
 
 def parses(raw: str) -> bool:
     """Разбирается ли строка разборщиками этого вида — для ocr.score_lines(kind="biquadratic").
-    Строка замены («Пусть x² = t, t ≥ 0») и корни новой переменной с индексами («t₁ = 4, t₂ = 1»)
-    разбираются так же, как в check; метки и текст без «=» формулами с ошибкой не считаются."""
+    Как в check: строка замены («Пусть x² = t, t ≥ 0») и корни новой переменной с индексами
+    («t₁ = 4, t₂ = 1», «t1 = 4») разбираются; уравнение с новой переменной — целиком; строка в x
+    после обратной замены — по левой части и корням «x = …» («x² = −3 — корней нет» — не ошибка
+    распознавания); метки и текст без «=» формулами с ошибкой не считаются."""
     if _subst_var(C.normalize(_pre(raw, None)).text):
         return True
     m = _T_INDEXED.search(raw)
     nm = C.normalize(_pre(raw, m.group(1) if m else None))
     if nm.label or "=" not in nm.text:
         return True
+    only_x = _OTHER_VAR.search(nm.text) is None
     try:
         for p in C._split_parts(nm.text):
             for q in C._expand_pm(p):
-                for seg in q.split("="):
-                    C.parse(C._cmp_split(seg), evaluate=False)
+                segs = [C._cmp_split(seg) for seg in q.split("=")]
+                head = C.parse(segs[0], evaluate=False)
+                if only_x and not (isinstance(head, sp.Symbol) and (head == X or str(head).startswith("x_"))):
+                    continue  # уравнение в x: check пропускает его, если правая часть не разобралась
+                for seg in segs[1:]:
+                    C.parse(seg, evaluate=False)
     except C.ParseError:
         return False
     return True
