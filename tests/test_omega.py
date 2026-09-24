@@ -589,3 +589,74 @@ def test_quality_downloads_are_audited(app_db, monkeypatch):
     cb(app_db, *args[1:])  # то, что Streamlit вызовет при скачивании
     last = audit.recent(app_db, 1)[0]
     assert (last["action"], last["user_id"], last["target_type"]) == ("export_quality", teacher["id"], "export")
+
+
+# ---------------------------------------------------------------- приёмка: дымовой тест и демо из README
+
+ALL_PAGES = ["class", "portrait", "check", "log", "quality", "manage", "practice", "about"]
+
+
+def _users(conn) -> dict:
+    admin = auth.get_user_by_login(conn, "omega_admin") or auth.get_user(
+        conn, auth.create_user(conn, "omega_admin", "Администратор", "admin", "password-adm1"))
+    return {"teacher": auth.get_user_by_login(conn, auth.DEMO_TEACHER),
+            "student": auth.get_user_by_login(conn, auth.DEMO_STUDENT), "admin": admin}
+
+
+@pytest.mark.parametrize("role", ["teacher", "student", "admin", "auth_off"])
+def test_smoke_all_pages(app_db, monkeypatch, role):
+    """Все разделы открываются без исключений; ученику доступны только портрет и тренажёр."""
+    if role == "auth_off":
+        monkeypatch.setenv("PORTRET_AUTH", "off")
+        user = None
+    else:
+        user = _users(app_db)[role]
+    pages = auth.allowed_pages(user or auth.dev_user(), ALL_PAGES)
+    assert pages == (["portrait", "practice"] if role == "student" else ALL_PAGES)
+    for page in pages:
+        at = run_app(page, user)
+        assert at.session_state["page"] == page
+    if role == "student":  # чужой раздел по прямой ссылке — сброс на доступный
+        assert run_app("quality", user).session_state["page"] == "portrait"
+
+
+@pytest.mark.parametrize("page", ["portrait", "practice", "check", "class"])
+def test_smoke_kk(app_db, page):
+    run_app(page, _users(app_db)["teacher"], lang="kk")
+
+
+def test_smoke_kk_student(app_db):
+    student = _users(app_db)["student"]
+    for page in ("portrait", "practice"):
+        run_app(page, student, lang="kk")
+
+
+def test_readme_demo_scenario(app_db):
+    """README: «Войти как демо-учитель» → «Проверка работы», ДЗ №7 → «Вставить демо-работу» → «Проверить» →
+    «Записать в журнал и обновить портрет» → «Потеря корня: 4/6 → 5/7». Повторная проверка снова даёт 5/7
+    и не приносит старых отметок (O1); после неё нет ссылок на несуществующие работы и наблюдения."""
+    import streamlit as st
+    from streamlit.testing.v1 import AppTest
+    st.cache_resource.clear()
+    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=180)
+    at.run()
+    click(at, "Войти как демо-учитель")
+    at.sidebar.radio[1].set_value("check").run()  # [0] — язык, [1] — раздел
+    assert not at.exception and at.session_state["page"] == "check"
+    assert at.session_state["chk_asg"] == seed.live_assignment_id(app_db)
+    record_demo_work(at)
+    diff = " ".join(at.session_state["diff"]["lines"])
+    assert "Потеря корня" in diff and "4/6 → 5/7" in diff
+    sid = _aigerim(app_db)
+    click(at, "✗ неверно")  # отметка на ошибке новой работы
+    assert _lost_root(portrait.build(app_db, sid)) == (4, 7)
+
+    click(at, "Проверить")  # повторная проверка той же работы
+    click(at, "Записать в журнал")
+    diff = " ".join(at.session_state["diff"]["lines"])
+    assert "4/6 → 5/7" in diff
+    new = db.q1(app_db, "SELECT id FROM submissions WHERE student_id=? AND source='live'", (sid,))["id"]
+    ids = [r["id"] for r in db.q(app_db, "SELECT id FROM observations WHERE submission_id=?", (new,))]
+    assert review.latest(app_db, ids) == {}
+    assert _lost_root(portrait.build(app_db, sid)) == (5, 7)
+    assert dangling(app_db) == []
