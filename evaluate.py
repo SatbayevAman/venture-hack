@@ -36,7 +36,7 @@ import time
 from datetime import date
 from pathlib import Path
 
-from core import llm, ocr
+from core import llm, ocr, quality
 from core.checker import check_problem, normalize
 from core.kinds import KINDS
 
@@ -156,8 +156,8 @@ def main() -> None:
         return
 
     all_rows, _ = read_labels(args.labels)
-    rows = [r for r in all_rows if (r.get("status") or "").strip() != "draft"]
-    n_draft = len(all_rows) - len(rows)
+    ref = quality.reference_accuracy(all_rows)  # та же функция, что у страницы «Качество»: черновики пропущены
+    rows, n_draft = [x["label"] for x in ref["rows"]], ref["n_draft"]
 
     by_photo: dict = {}
     times: list = []
@@ -178,19 +178,12 @@ def main() -> None:
     n_lines = ok_lines = 0
     cer_err = cer_chars = 0
     conf_pairs: list = []
-    n_err = ok_err_line = ok_err_tag = 0
+    n_err, ok_err_line, ok_err_tag = ref["n"], ref["ok_line"], ref["ok_tag"]
     n_e2e = ok_e2e = ok_e2e_tag = 0
-    for i, r in enumerate(rows, 1):
-        truth = [l.strip() for l in r["lines"].split("|") if l.strip()]
-        want_line = int(r.get("error_line") or 0)
-        want_tag = (r.get("error_tag") or "").strip()
-        res = check_problem(r["kind"], r["statement"], truth, None)
-        got_line = res.first_error["line"] if res.first_error else 0
-        got_tag = res.first_error["tag"] if res.first_error else ""
-        n_err += 1
-        ok_err_line += got_line == want_line
-        ok_err_tag += got_line == want_line and (not want_tag or got_tag == want_tag)
-        mark = "✓" if got_line == want_line else "✗"
+    for i, x in enumerate(ref["rows"], 1):
+        r, truth = x["label"], x["truth"]
+        want_line, want_tag, got_line, got_tag = x["want_line"], x["want_tag"], x["got_line"], x["got_tag"]
+        mark = "✓" if x["ok_line"] else "✗"
         print(f"{i:>3} {mark} {r['statement']:<32} эталон: {want_line}/{want_tag or '-':<10} проверка: {got_line}/{got_tag or '-'}")
 
         if args.ocr and r.get("photo") and by_photo.get(r["photo"]) is not None:

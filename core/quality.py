@@ -159,17 +159,15 @@ def candidates_markdown(conn, lang: str = "ru", tags: Optional[list] = None, stu
 
 # ---------------------------------------------------------------- 2. точность на размеченных работах
 
-def eval_accuracy(path: str | Path = LABELS) -> dict:
-    """Прогон check_problem по эталонным строкам eval/labels.csv — как `python evaluate.py` без --ocr."""
-    path = Path(path)
-    if not path.is_absolute() and not path.exists():
-        path = LABELS.parent.parent / path
-    if not path.exists():
-        return {"available": False, "path": str(path), "n": 0, "ok_line": 0, "ok_tag": 0, "rows": []}
-    with open(path, encoding="utf-8-sig", newline="") as f:
-        labels = list(csv.DictReader(f))
-    rows = []
+def reference_accuracy(labels: list[dict]) -> dict:
+    """Первая ошибка на эталонных строках разметки — одна функция для `python evaluate.py` и страницы
+    «Качество», чтобы цифры не расходились. Черновики (status=draft) пропускаются и считаются.
+    → {"n", "ok_line", "ok_tag", "n_draft", "rows"}; в строке — поля сверки, truth и исходная строка label."""
+    rows, n_draft = [], 0
     for r in labels:
+        if (r.get("status") or "").strip() == "draft":
+            n_draft += 1
+            continue
         truth = [l.strip() for l in (r.get("lines") or "").split("|") if l.strip()]
         want_line = int(r.get("error_line") or 0)
         want_tag = (r.get("error_tag") or "").strip()
@@ -179,10 +177,21 @@ def eval_accuracy(path: str | Path = LABELS) -> dict:
         ok_line = got_line == want_line
         rows.append({"statement": r["statement"], "kind": r["kind"], "want_line": want_line, "want_tag": want_tag,
                      "got_line": got_line, "got_tag": got_tag, "ok_line": ok_line,
-                     "ok_tag": ok_line and (not want_tag or got_tag == want_tag)})
-    n = len(rows)
-    return {"available": True, "path": str(path), "n": n,
-            "ok_line": sum(r["ok_line"] for r in rows), "ok_tag": sum(r["ok_tag"] for r in rows), "rows": rows}
+                     "ok_tag": ok_line and (not want_tag or got_tag == want_tag), "truth": truth, "label": r})
+    return {"n": len(rows), "ok_line": sum(r["ok_line"] for r in rows), "ok_tag": sum(r["ok_tag"] for r in rows),
+            "n_draft": n_draft, "rows": rows}
+
+
+def eval_accuracy(path: str | Path = LABELS) -> dict:
+    """Прогон check_problem по эталонным строкам eval/labels.csv — как `python evaluate.py` без --ocr."""
+    path = Path(path)
+    if not path.is_absolute() and not path.exists():
+        path = LABELS.parent.parent / path
+    if not path.exists():
+        return {"available": False, "path": str(path), "n": 0, "ok_line": 0, "ok_tag": 0, "n_draft": 0, "rows": []}
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        labels = list(csv.DictReader(f))
+    return {"available": True, "path": str(path), **reference_accuracy(labels)}
 
 
 # ---------------------------------------------------------------- 3. время проверки

@@ -526,3 +526,35 @@ def test_synthetic_badge_only_for_synthetic(app_db):
     at = run_app("portrait", demo)
     assert "данные синтетические" in _sidebar_text(at) and "вымышленных" in _sidebar_text(at)
     assert "синтетические данные" in _texts(at)
+
+
+# ---------------------------------------------------------------- O14. одна функция точности на размеченных работах
+
+def test_evaluate_and_quality_agree_on_drafts(tmp_path, monkeypatch, capsys):
+    import csv
+    import re
+    import sys
+    import evaluate
+    path = tmp_path / "labels.csv"
+    rows = [
+        {"kind": "equation", "statement": "x² = 5x", "lines": "x = 5 | Ответ: 5", "error_line": "1", "error_tag": "lost_root"},
+        {"kind": "equation", "statement": "3x + 5 = x − 3", "lines": "3x − x = −3 − 5 | 2x = −8 | x = −4",
+         "error_line": "0", "error_tag": ""},
+        # черновик с неверным эталоном: если бы его считали, цифры разошлись бы
+        {"kind": "equation", "statement": "x² = 7x", "lines": "x = 7", "error_line": "0", "error_tag": "", "status": "draft"},
+    ]
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=evaluate.FIELDS)
+        w.writeheader()
+        for r in rows:
+            w.writerow({k: r.get(k, "") for k in evaluate.FIELDS})
+    q = quality.eval_accuracy(path)
+    assert (q["n"], q["ok_line"], q["ok_tag"], q["n_draft"]) == (2, 2, 2, 1)
+    monkeypatch.setattr(sys, "argv", ["evaluate.py", "--labels", str(path)])
+    evaluate.main()
+    out = capsys.readouterr().out
+    n = int(re.search(r"Задач в разметке \(без черновиков\)\s+(\d+)", out).group(1))
+    ok_line = re.search(r"Первая ошибка \(строка\) на эталонных строках\s+(\d+)/(\d+)", out).groups()
+    ok_tag = re.search(r"Первая ошибка \(строка и тег\) на эталонных строках\s+(\d+)/(\d+)", out).groups()
+    assert (n, int(ok_line[0]), int(ok_tag[0])) == (q["n"], q["ok_line"], q["ok_tag"])
+    assert "пропущено черновиков: 1" in out
