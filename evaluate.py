@@ -38,6 +38,7 @@ from pathlib import Path
 
 from core import llm, ocr
 from core.checker import check_problem, normalize
+from core.kinds import KINDS
 
 ROOT = Path(__file__).parent / "eval"
 FIELDS = ["photo", "problem", "kind", "statement", "lines", "error_line", "error_tag", "status"]
@@ -97,12 +98,13 @@ def recognize_photo(cfg, photo: str, rows: list, passes: int) -> tuple[dict, flo
     """Одно фото → {номер задачи: [строки с confidence и flags]}, секунды."""
     data = (ROOT / photo).read_bytes()
     problems = sorted({(int(r.get("problem") or 1), r["statement"]) for r in rows})
+    kinds = {int(r.get("problem") or 1): r.get("kind") for r in rows}
     t0 = time.perf_counter()
     det = llm.recognize_detailed(cfg, data, problems, passes=passes)
     secs = time.perf_counter() - t0
     out = {}
     for idx, lines in det.items():
-        out[idx] = ocr.score_lines([{**l, "text": ocr.clean_text(l["text"])} for l in lines])
+        out[idx] = ocr.score_lines([{**l, "text": ocr.clean_text(l["text"])} for l in lines], kinds.get(idx))
     return out, secs
 
 
@@ -141,7 +143,7 @@ def main() -> None:
     ap.add_argument("--out", help="записать таблицу результатов в markdown (например, eval/results.md)")
     ap.add_argument("--draft", metavar="PHOTO", help="распознать фото и дописать черновую строку в labels.csv")
     ap.add_argument("--statement", help="условие задачи для --draft")
-    ap.add_argument("--kind", default="equation", choices=("equation", "expression"))
+    ap.add_argument("--kind", default="equation", choices=("equation", "expression", *KINDS))
     ap.add_argument("--problem", type=int, default=1, help="номер задачи на фото для --draft")
     args = ap.parse_args()
     cfg = llm.config_from_env()

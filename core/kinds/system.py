@@ -276,6 +276,32 @@ def _vars_in(d: sp.Expr) -> set:
 # 4. Проверка решения
 # --------------------------------------------------------------------------
 
+def parses(raw: str) -> bool:
+    """Разбирается ли строка разборщиками этого вида — для ocr.score_lines(kind="system").
+    False — там, где check пометил бы строку «unparsed»; пары «(3; 2)», строки системы
+    с фигурной скобкой «⎧ … / ⎩ …» и ответ словами формулами с ошибкой не считаются."""
+    nm = C.normalize(re.sub(rf"^\s*[{_BRACE_ANY}]\s*", "", raw))
+    txt = nm.text
+    if nm.label in ("check", "domain", "rejected") or nm.empty or not txt or any(k in raw.lower() for k in KW_INFINITE) \
+            or parse_pairs(_strip_label(raw)) is not None:
+        return True
+    try:  # те же ветки, что в check: значения → строка системы → одиночное уравнение
+        eq_parts = [p for p in txt.split(";") if "=" in p]
+        parts = [q for p in C._split_parts(txt) for q in C._expand_pm(p)]
+        if parts and all(_value_part(p) for p in parts):
+            return True
+        if (len(eq_parts) == 2 and ";" in txt) or raw.lstrip()[:1] in _BRACE_OPEN:
+            for p in eq_parts or [txt]:
+                _eq(p)
+            return True
+        for p in parts:
+            if "=" in p:
+                _eq(p)
+    except C.ParseError:
+        return False
+    return True
+
+
 def check(statement: str, raw_lines: list, reference_len: Optional[int] = None,
           reference_answer: Optional[str] = None) -> C.CheckResult:
     st_parts = [p for p in C.normalize(statement).text.split(";") if p.strip()]

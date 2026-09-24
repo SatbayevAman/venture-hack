@@ -532,6 +532,28 @@ def classify(prev: Item, cur: Item, skip=(), domain=()) -> tuple:
 # 4. Проверка решения
 # --------------------------------------------------------------------------
 
+def parses(raw: str) -> bool:
+    """Разбирается ли строка разборщиками этого вида — для ocr.score_lines(kind="inequality").
+    False — там, где check пометил бы строку «unparsed»; метки, строка знаков «+ − +»,
+    промежутки «x ∈ [−2; 3]» и текст без «=» формулами с ошибкой не считаются."""
+    nm = C.normalize(raw)
+    body = _strip_label(raw)
+    ub = _uni(body)
+    if nm.label in ("domain", "rejected", "check") or nm.empty or _is_sign_chart(body) \
+            or (_REL_SPLIT.search(ub) and re.search(r"(?<![<>])=", ub)):
+        return True
+    try:
+        if parse_relation(body) is not None or parse_intervals(body) is not None or "=" not in nm.text:
+            return True
+        for p in C._split_parts(nm.text):
+            for q in C._expand_pm(p):
+                for seg in q.split("="):
+                    C.parse(C._cmp_split(seg), evaluate=False)
+    except C.ParseError:
+        return False
+    return True
+
+
 def check(statement: str, raw_lines: list, reference_len: Optional[int] = None,
           reference_answer: Optional[str] = None) -> C.CheckResult:
     st_rel = parse_relation(_strip_label(statement))

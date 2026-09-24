@@ -76,6 +76,29 @@ def _segment(raw_lines: list, keep: set) -> list:
     return [raw if i in keep else "" for i, raw in enumerate(raw_lines, start=1)]
 
 
+_T_INDEXED = re.compile(r"(?<![A-Za-z])([a-wzA-Z])\s*(?:[₁₂]|_\s*[12](?![0-9]))")
+
+
+def parses(raw: str) -> bool:
+    """Разбирается ли строка разборщиками этого вида — для ocr.score_lines(kind="biquadratic").
+    Строка замены («Пусть x² = t, t ≥ 0») и корни новой переменной с индексами («t₁ = 4, t₂ = 1»)
+    разбираются так же, как в check; метки и текст без «=» формулами с ошибкой не считаются."""
+    if _subst_var(C.normalize(_pre(raw, None)).text):
+        return True
+    m = _T_INDEXED.search(raw)
+    nm = C.normalize(_pre(raw, m.group(1) if m else None))
+    if nm.label or "=" not in nm.text:
+        return True
+    try:
+        for p in C._split_parts(nm.text):
+            for q in C._expand_pm(p):
+                for seg in q.split("="):
+                    C.parse(C._cmp_split(seg), evaluate=False)
+    except C.ParseError:
+        return False
+    return True
+
+
 def check(statement: str, raw_lines: list, reference_len: Optional[int] = None,
           reference_answer: Optional[str] = None) -> C.CheckResult:
     st_d = _eq_d(C.normalize(statement).text)

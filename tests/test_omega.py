@@ -317,3 +317,88 @@ def test_log_filter_practice(app_db):
     box.select("practice").run()
     df = at.dataframe[0].value
     assert len(df) == 1 and set(df["Источник"]) == {"practice"}
+
+
+# ---------------------------------------------------------------- O8. распознавание знает новые темы Беты
+
+NEW_TOPIC_LINES = [
+    ("inequality", "x ∈ [−2; 3]"), ("inequality", "+ − +"), ("inequality", "(−∞; −1) ∪ [3; +∞)"),
+    ("inequality", "x < −3"), ("inequality", "Ответ: (−∞; −3)"),
+    ("system", "(3; 2)"), ("system", "Ответ: (3; 4), (4; 3)"), ("system", "x + y = 5; x − y = 1"),
+    ("system", "⎩x − y = 1"), ("system", "x₁ = 3, x₂ = 4"),
+    ("biquadratic", "t = x²"), ("biquadratic", "Пусть x² = t, t ≥ 0"), ("biquadratic", "t₁ = 4, t₂ = 1"),
+]
+
+
+@pytest.mark.parametrize("kind,text", NEW_TOPIC_LINES)
+def test_score_lines_new_topics(kind, text):
+    from core import ocr
+    line = ocr.score_lines([text], kind)[0]
+    assert "unparsable" not in line["flags"] and not ocr.needs_review(line)
+
+
+def test_score_lines_kind_still_flags_garbage():
+    from core import ocr
+    for kind, text in [("inequality", "x < −3 + ("), ("system", "x + = 3"), ("biquadratic", "x² = (4")]:
+        assert "unparsable" in ocr.score_lines([text], kind)[0]["flags"]
+    # без вида и для equation/expression — прежний общий разбор
+    assert ocr.score_lines(["x ∈ [−2; 3]"])[0]["flags"] == ["unparsable"]
+    assert ocr.score_lines(["x ∈ [−2; 3]"], "equation")[0]["flags"] == ["unparsable"]
+
+
+def test_parses_agrees_with_check_on_extra_assignments():
+    """parses вида = «check не пометил строку unparsed» на эталонах и типичных ошибках ДЗ №8–10."""
+    from core import ocr
+    from core.checker import check_problem
+    for ex in seed.EXTRA_ASSIGNMENTS:
+        for idx, (_, kind, st, ref, ans) in enumerate(ex["problems"], 1):
+            for lines in [ref, *seed.EXTRA_VARIANTS.get(ex["number"], {}).get(idx, {}).values()]:
+                for lr in check_problem(kind, st, lines, len(ref), ans).lines:
+                    flagged = "unparsable" in ocr.score_line(lr.raw, kind)["flags"]
+                    assert flagged == (lr.status == "unparsed"), (kind, lr.raw)
+
+
+def test_unverified_swap_line_not_downgraded():
+    """Верная ошибка swap_xy в строке ответа «(2; 3)», прочитанной уверенно, пишется с полной уверенностью."""
+    from core import ocr
+    from core.checker import check_problem
+    st, lines = "x + y = 5; x − y = 1", ["x = 3", "y = 2", "(2; 3)"]
+    res = check_problem("system", st, lines, None, "(3; 2)")
+    assert res.first_error and res.first_error["tag"] == "swap_xy"
+    raw = ocr.score_lines(lines, "system")
+    assert all(not ocr.needs_review(l) for l in raw)
+    assert not ocr.error_unverified(1, res, ocr.unverified({1: raw}, {1: lines}))
+    old = ocr.score_lines(lines)  # без вида строка ответа «не разбирается» → confidence 0.6 в журнале
+    assert ocr.error_unverified(1, res, ocr.unverified({1: old}, {1: lines}))
+
+
+@pytest.mark.parametrize("raw,want", [
+    (r"x \in [-2; 3]", "x ∈ [-2; 3]"),
+    (r"(-\infty; -3)", "(-∞; -3)"),
+    (r"(-\infty; -1) \cup [3; +\infty)", "(-∞; -1) ∪ [3; +∞)"),
+    (r"\{ x + y = 5", "x + y = 5"),
+    (r"\{(3; 2)\}", "(3; 2)"),
+])
+def test_clean_text_new_latex(raw, want):
+    from core import ocr
+    assert ocr.clean_text(raw) == want
+
+
+def test_ocr_prompt_rules_for_new_topics():
+    from core import llm
+    for bit in ("≤ ≥", "∞", "∪", "+ − +", "двумя строками", "\\infty"):
+        assert bit in llm._RULES
+    assert "фигурные скобки LaTeX" in llm._RULES  # запрет — только на скобки LaTeX, не на систему в тетради
+
+
+def test_evaluate_passes_kind_to_score_lines(tmp_path, monkeypatch):
+    import evaluate
+    from core import llm
+    (tmp_path / "p.jpg").write_bytes(b"fake")
+    monkeypatch.setattr(evaluate, "ROOT", tmp_path)
+    monkeypatch.setattr(llm, "recognize_detailed", lambda cfg, data, problems, passes=1: {
+        1: [{"text": "x ∈ [−2; 3]", "unsure": []}], 2: [{"text": "x ∈ [−2; 3]", "unsure": []}]})
+    rows = [{"photo": "p.jpg", "problem": "1", "kind": "inequality", "statement": "x² − x − 6 ≤ 0"},
+            {"photo": "p.jpg", "problem": "2", "kind": "equation", "statement": "x² = 4"}]
+    out, _ = evaluate.recognize_photo(llm.LLMConfig(), "p.jpg", rows, 1)
+    assert out[1][0]["flags"] == [] and out[2][0]["flags"] == ["unparsable"]

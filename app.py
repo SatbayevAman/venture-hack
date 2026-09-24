@@ -647,15 +647,15 @@ def page_check():
                 with st.spinner(L("Распознаю почерк…", "Қолжазбаны танып жатырмын…")):
                     det = llm.recognize_detailed(cfg, up.getvalue(), [(p["idx"], p["statement"]) for p in probs], passes=passes)
 
-                def _prep(lines):
+                def _prep(lines, kind=None):  # kind — вид задачи: строки неравенств и систем разбирает модуль вида
                     out = []
                     for l in lines:
                         l = {**l, "text": ocr.clean_text(l["text"])}
                         if l.get("alternatives"):
                             l["alternatives"] = [ocr.clean_text(a) for a in l["alternatives"]]
                         out.append(l)
-                    return ocr.score_lines(out)
-                ss["ocr_view"] = {p["id"]: _prep(det.get(p["idx"], [])) for p in probs}
+                    return ocr.score_lines(out, kind)
+                ss["ocr_view"] = {p["id"]: _prep(det.get(p["idx"], []), p["kind"]) for p in probs}
                 ss["ocr_raw"] = {pid: list(ls) for pid, ls in ss["ocr_view"].items()}
                 ss["ocr_unassigned"] = _prep(det.get(llm.UNASSIGNED, []))
                 ss["ocr_aid"], ss["ocr_run"] = aid, ss.get("ocr_run", 0) + 1
