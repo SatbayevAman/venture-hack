@@ -19,14 +19,9 @@ SPECIAL = {"students", "submissions", "users"}
 CSV_FORMULA_PREFIX = ("=", "+", "-", "@", "\t", "\r")
 
 
-def _qi(name: str) -> str:
-    """Имя таблицы или столбца из sqlite_master — в кавычках SQL-идентификатора."""
-    return '"' + name.replace('"', '""') + '"'
-
-
-def _tables(conn) -> dict[str, list[str]]:
-    names = [r["name"] for r in db.q(conn, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
-    return {n: [c["name"] for c in db.q(conn, f"PRAGMA table_info({_qi(n)})")] for n in names}
+# общие с pipeline.delete_submission: таблицы и столбцы ищутся по схеме базы
+_qi = db.qi
+_tables = db.tables
 
 
 def _in(ids) -> tuple[str, list]:

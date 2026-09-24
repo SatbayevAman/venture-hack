@@ -133,6 +133,19 @@ def add_observation(conn, student_id, submission_id, problem_id, line_no, kind, 
     )
 
 
+def qi(name: str) -> str:
+    """Имя таблицы или столбца из sqlite_master — в кавычках SQL-идентификатора."""
+    return '"' + name.replace('"', '""') + '"'
+
+
+def tables(conn) -> dict[str, list[str]]:
+    """{таблица: [столбцы]} по sqlite_master и PRAGMA table_info — включая таблицы, которые модули
+    направлений создают сами. Удаление работы и ученика ищет по ним столбцы-ссылки, поэтому новые
+    таблицы покрываются без правок удаления."""
+    names = [r["name"] for r in q(conn, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+    return {n: [c["name"] for c in q(conn, f"PRAGMA table_info({qi(n)})")] for n in names}
+
+
 def q(conn, sql: str, params=()) -> list[sqlite3.Row]:
     return conn.execute(sql, params).fetchall()
 
