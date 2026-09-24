@@ -350,4 +350,6 @@ def build(conn, progress=None) -> None:
 
 
 def live_assignment_id(conn) -> int:
-    return db.q1(conn, "SELECT id FROM assignments ORDER BY number DESC LIMIT 1")["id"]
+    """ДЗ для живого демо — всегда №7 (len(HOMEWORKS) + 1), даже если заданий больше."""
+    row = db.q1(conn, "SELECT id FROM assignments WHERE number=?", (len(HOMEWORKS) + 1,))
+    return row["id"] if row else db.q1(conn, "SELECT id FROM assignments ORDER BY number DESC LIMIT 1")["id"]

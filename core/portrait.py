@@ -305,9 +305,12 @@ def _rec_label(key: str, lang: str) -> str:
 
 # ---------------------------------------------------------------- карта класса
 
-def class_map(conn, lang: str = "ru") -> list[dict]:
+def class_map(conn, lang: str = "ru", student_ids=None) -> list[dict]:
+    """student_ids — необязательный фильтр видимости; None — все ученики."""
     rows = []
     for s in db.q(conn, "SELECT * FROM students ORDER BY id"):
+        if student_ids is not None and s["id"] not in student_ids:
+            continue
         p = build(conn, s["id"], lang)
         cells = {}
         order = [w["id"] for w in p["works"]]

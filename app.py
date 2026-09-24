@@ -13,9 +13,10 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from core import db, llm, pipeline, portrait, seed
+from core import audit, auth, consent, db, llm, pipeline, portrait, seed
 from core import tags as T
 from core.tags import question_for, tag_comment_keywords
+from ui import login as login_view, manage as manage_view
 
 ROOT = Path(__file__).parent
 DB_PATH = os.environ.get("PORTRET_DB", str(ROOT / "data" / "portret.db"))
@@ -95,7 +96,7 @@ def reset_demo():
 
 if "lang" not in ss:
     ss["lang"] = "ru"
-PAGES = ["class", "portrait", "check", "log", "about"]
+PAGES = ["class", "portrait", "check", "log", "manage", "about"]
 
 lang = ss["lang"]  # значение радиокнопки уже в session_state до её отрисовки
 
@@ -127,16 +128,26 @@ def remember(name: str, value):
     return value
 
 
+user = login_view.gate(conn, L)          # без входа рисует форму и вызывает st.stop()
+PAGES = auth.allowed_pages(user, PAGES)
+is_admin = user["role"] == "admin"
+
 PAGE_NAMES = {
     "class": L("🏫 Карта класса", "🏫 Сынып картасы"),
     "portrait": L("👤 Портрет ученика", "👤 Оқушы портреті"),
     "check": L("📷 Проверка работы", "📷 Жұмысты тексеру"),
     "log": L("📒 Журнал наблюдений", "📒 Бақылау журналы"),
+    "manage": L("🛡️ Управление", "🛡️ Басқару"),
     "about": L("⚙️ Как это работает", "⚙️ Бұл қалай жұмыс істейді"),
 }
 
+if ss.get("page") not in PAGES:  # раздел недоступен этой роли
+    ss.pop("page", None)
+    for _k in [k for k in ss if str(k).startswith("w_page_")]:
+        del ss[_k]
+
 with st.sidebar:
-    page = remember("page", st.radio(L("Раздел", "Бөлім"), PAGES, key=sticky("page", "class"),
+    page = remember("page", st.radio(L("Раздел", "Бөлім"), PAGES, key=sticky("page", PAGES[0]),
                                      format_func=lambda p: PAGE_NAMES[p], label_visibility="collapsed"))
     st.divider()
 
@@ -154,16 +165,21 @@ with st.sidebar:
                      "Без неё: строки вводятся текстом, комментарии размечаются по словарю.",
                      "Тек фотоны тану, пікірлерді белгілеу және тұжырымдау үшін керек. "
                      "Онсыз: жолдар мәтінмен енгізіледі, пікірлер сөздік бойынша белгіленеді."))
-        prov = st.selectbox(L("Провайдер", "Провайдер"), ["anthropic", "openai"],
-                            index=0 if cfg.provider != "openai" else 1,
-                            help="openai = любой OpenAI-совместимый API (OpenAI, Gemini, OpenRouter)")
-        key = st.text_input("API key", value=cfg.api_key, type="password")
-        model = st.text_input(L("Модель", "Модель"), value=cfg.model or llm.DEFAULT_MODELS[prov])
-        base = st.text_input("Base URL", value=cfg.base_url, disabled=prov != "openai")
-        if st.button(L("Применить", "Қолдану"), use_container_width=True):
-            ss["llm_cfg"] = llm.LLMConfig(prov, key.strip(), model.strip(), base.strip())
-            st.rerun()
-        st.caption(L("Сейчас: ", "Қазір: ") + cfg.label())
+        if not is_admin:  # ключ живёт только на сервере (st.secrets / окружение); учитель его не видит
+            st.markdown(L("Статус: ", "Күйі: ") + (L("подключена", "қосылған") if cfg.ready else L("не подключена", "қосылмаған")))
+        else:
+            prov = st.selectbox(L("Провайдер", "Провайдер"), ["anthropic", "openai"],
+                                index=0 if cfg.provider != "openai" else 1,
+                                help="openai = любой OpenAI-совместимый API (OpenAI, Gemini, OpenRouter)")
+            # значение ключа в браузер не отправляем: пустое поле = оставить ключ сервера
+            key = st.text_input("API key", value="", type="password",
+                                placeholder=L("задан на сервере", "серверде берілген") if cfg.api_key else "")
+            model = st.text_input(L("Модель", "Модель"), value=cfg.model or llm.DEFAULT_MODELS[prov])
+            base = st.text_input("Base URL", value=cfg.base_url, disabled=prov != "openai")
+            if st.button(L("Применить", "Қолдану"), use_container_width=True):
+                ss["llm_cfg"] = llm.LLMConfig(prov, key.strip() or cfg.api_key, model.strip(), base.strip())
+                st.rerun()
+            st.caption(L("Сейчас: ", "Қазір: ") + cfg.label())
 
     st.divider()
     st.markdown('<span class="badge b-syn">' + L("данные синтетические", "синтетикалық деректер") + "</span>",
@@ -172,7 +188,7 @@ with st.sidebar:
                  "в журнал записала настоящая проверка SymPy.",
                  "8 ойдан шығарылған оқушы × 6 жұмыс. Шешім жолдары генерацияланған, бірақ "
                  "журналдағы барлық қорытындыны нақты SymPy тексеруі жазды."))
-    if st.button(L("↺ Сбросить демо-данные", "↺ Демоны қайта бастау"), use_container_width=True):
+    if is_admin and st.button(L("↺ Сбросить демо-данные", "↺ Демоны қайта бастау"), use_container_width=True):
         reset_demo()
         st.rerun()
 
@@ -251,7 +267,24 @@ def show_ref_work(r: dict):
 
 
 def students():
-    return db.q(conn, "SELECT * FROM students ORDER BY id")
+    ids = auth.visible_student_ids(conn, user)
+    return [s for s in db.q(conn, "SELECT * FROM students ORDER BY id") if ids is None or s["id"] in ids]
+
+
+def visible_filter(col: str) -> tuple[str, list]:
+    """SQL-условие видимости « AND col IN (…)» для всех, кроме администратора."""
+    ids = auth.visible_student_ids(conn, user)
+    if ids is None:
+        return "", []
+    return f" AND {col} IN ({','.join('?' * len(ids)) or 'NULL'})", sorted(ids)
+
+
+def no_students() -> bool:
+    if students():
+        return False
+    st.info(L("В ваших классах пока нет учеников. Классы назначает администратор.",
+              "Сыныптарыңызда әзірге оқушы жоқ. Сыныптарды әкімші тағайындайды."))
+    return True
 
 
 def go(page_key: str, student_id: int | None = None):
@@ -271,16 +304,24 @@ def heat(p: float) -> str:
 # ------------------------------------------------------------------ страницы
 
 def page_class():
-    cls = db.q1(conn, "SELECT class_name FROM students LIMIT 1")["class_name"]
+    if no_students():
+        return
+    classes = sorted({s["class_name"] for s in students()})
+    cls = classes[0]
+    if len(classes) > 1:
+        cls = remember("class_name", st.selectbox(L("Класс", "Сынып"), classes, key=sticky("class_name", classes[0])))
+    class_ids = {s["id"] for s in students() if s["class_name"] == cls}
     st.title(L(f"Карта класса {cls}", f"{cls} сыныбының картасы"))
     st.caption(L("Доля работ с ошибками по каждому навыку; свежие работы весят больше. "
                  "Нажмите на строку, чтобы открыть портрет ученика.",
                  "Әр дағды бойынша қатесі бар жұмыстардың үлесі; жаңа жұмыстардың салмағы көбірек. "
                  "Оқушы портретін ашу үшін жолды басыңыз."))
-    n_sub = db.q1(conn, "SELECT COUNT(*) c FROM submissions")["c"]
-    n_obs = db.q1(conn, "SELECT COUNT(*) c FROM observations")["c"]
-    n_com = db.q1(conn, "SELECT COUNT(*) c FROM teacher_comments")["c"]
-    rows = portrait.class_map(conn, lang)
+    vis, args = f" AND student_id IN ({','.join('?' * len(class_ids))})", sorted(class_ids)
+    n_sub = db.q1(conn, "SELECT COUNT(*) c FROM submissions WHERE 1=1" + vis, args)["c"]
+    n_obs = db.q1(conn, "SELECT COUNT(*) c FROM observations WHERE 1=1" + vis, args)["c"]
+    n_com = db.q1(conn, "SELECT COUNT(*) c FROM teacher_comments tc JOIN submissions s ON s.id = tc.submission_id WHERE 1=1"
+                  + vis.replace("student_id", "s.student_id"), args)["c"]
+    rows = portrait.class_map(conn, lang, student_ids=class_ids)
     c = st.columns(4)
     c[0].metric(L("Учеников", "Оқушы"), len(rows))
     c[1].metric(L("Работ проверено", "Тексерілген жұмыс"), n_sub)
@@ -327,8 +368,8 @@ def page_class():
 
     # что повторить со всем классом
     common = db.q(conn, """SELECT tag, skill, COUNT(DISTINCT student_id) n, COUNT(*) c FROM observations
-                           WHERE source='auto' AND kind='error' AND tag != 'other'
-                           GROUP BY tag, skill HAVING n >= 2 ORDER BY c DESC, n DESC""")
+                           WHERE source='auto' AND kind='error' AND tag != 'other'""" + vis + """
+                           GROUP BY tag, skill HAVING n >= 2 ORDER BY c DESC, n DESC""", args)
     if common:
         st.subheader(L("Что повторить со всем классом", "Бүкіл сыныппен не қайталау керек"))
         st.caption(L("Ошибки, которые встречаются у двух и более учеников, по числу случаев.",
@@ -339,17 +380,25 @@ def page_class():
 
 
 def page_portrait():
+    if no_students():
+        return
     studs = students()
     alias = {s["id"]: s["alias"] for s in studs}
-    if ss.get("student_id") not in alias:
-        ss["student_id"] = studs[0]["id"]
-    top = st.columns([2, 2, 3])
-    sid = remember("student_id", top[0].selectbox(L("Ученик", "Оқушы"), list(alias), key=sticky("student_id", studs[0]["id"]),
-                                                  format_func=lambda i: alias[i]))
-    audience = top[1].radio(L("Версия", "Нұсқа"), ["teacher", "student"], horizontal=True, key=sticky("audience", "teacher"),
-                            format_func=lambda a: {"teacher": L("для учителя", "мұғалімге"),
-                                                   "student": L("для ученика", "оқушыға")}[a])
-    remember("audience", audience)
+    if user["role"] == "student":  # ученик — только свой портрет и только мягкая версия, без выбора
+        sid, audience = user["student_id"], "student"
+    else:
+        if ss.get("student_id") not in alias:
+            ss["student_id"] = studs[0]["id"]
+        top = st.columns([2, 2, 3])
+        sid = remember("student_id", top[0].selectbox(L("Ученик", "Оқушы"), list(alias), key=sticky("student_id", studs[0]["id"]),
+                                                      format_func=lambda i: alias[i]))
+        audience = top[1].radio(L("Версия", "Нұсқа"), ["teacher", "student"], horizontal=True, key=sticky("audience", "teacher"),
+                                format_func=lambda a: {"teacher": L("для учителя", "мұғалімге"),
+                                                       "student": L("для ученика", "оқушыға")}[a])
+        remember("audience", audience)
+    if ss.get("_audit_view") != (sid, audience):  # одна строка аудита на просмотр, а не на каждую перерисовку
+        audit.log(conn, user, "view_portrait", "student", sid)
+        ss["_audit_view"] = (sid, audience)
     p = portrait.build(conn, sid, lang)
     st.title(L(f"Портрет: {p['student']['alias']}", f"Портрет: {p['student']['alias']}"))
     live = badge(L("есть живая проверка", "тірі тексеру бар"), "b-live") if p["has_live"] else ""
@@ -528,13 +577,15 @@ def page_check():
     st.title(L("Проверка работы", "Жұмысты тексеру"))
     st.caption(L("Фото или текст → строки → проверка SymPy → первая неверная строка и наводящий вопрос → запись в журнал.",
                  "Фото немесе мәтін → жолдар → SymPy тексеруі → алғашқы қате жол және бағыттаушы сұрақ → журналға жазу."))
+    if no_students():
+        return
     studs = students()
     alias = {s["id"]: s["alias"] for s in studs}
     asg = db.q(conn, "SELECT * FROM assignments ORDER BY number DESC")
     c = st.columns(2)
     sid = remember("chk_student", c[0].selectbox(L("Ученик", "Оқушы"), list(alias), format_func=lambda i: alias[i],
                                                  key=sticky("chk_student", studs[0]["id"])))
-    aid = remember("chk_asg", c[1].selectbox(L("Задание", "Тапсырма"), [a["id"] for a in asg], key=sticky("chk_asg", asg[0]["id"]),
+    aid = remember("chk_asg", c[1].selectbox(L("Задание", "Тапсырма"), [a["id"] for a in asg], key=sticky("chk_asg", seed.live_assignment_id(conn)),
                          format_func=lambda i: next(f"{L('ДЗ', 'ҮТ')} №{a['number']} ({L('срок', 'мерзімі')} {a['due_at'][:10]})"
                                                     for a in asg if a["id"] == i)))
     probs = pipeline.problems_of(conn, aid)
@@ -644,6 +695,13 @@ def page_check():
                    "Мұғалімнің пікірі (міндетті емес, еркін мәтін, орыс/қаз)"), key="comment_text", height=80)
     if st.button(L("Записать в журнал и обновить портрет", "Журналға жазып, портретті жаңарту"), type="primary",
                  use_container_width=True):
+        if not auth.can_see(conn, user, sid) or not consent.required_ok(conn, sid):
+            audit.log(conn, user, "record_refused", "student", sid)
+            st.error(L("Нет согласия на анализ работ этого ученика — работа не записана. "
+                       "Отметьте согласие по бумажной форме: «🛡️ Управление» → «Согласия».",
+                       "Бұл оқушының жұмыстарын талдауға келісім жоқ — жұмыс жазылмады. "
+                       "Келісімді қағаз нысаны бойынша белгілеңіз: «🛡️ Басқару» → «Келісімдер»."))
+            return
         old = db.q(conn, "SELECT id FROM submissions WHERE student_id=? AND assignment_id=? AND source='live'", (sid, aid))
         for o in old:  # повторная живая проверка той же работы заменяет прежнюю
             pipeline.delete_submission(conn, o["id"])
@@ -661,6 +719,7 @@ def page_check():
             pipeline.record_comment(conn, sub_id, text, tagged or tag_comment_keywords(text), tagger)
         after = portrait.snapshot(portrait.build(conn, sid, lang))
         ss["diff"] = {"sid": sid, "lines": portrait.diff(before, after, lang)}
+        audit.log(conn, user, "record_submission", "submission", sub_id)
         chk["saved"] = True
         st.rerun()
 
@@ -671,6 +730,8 @@ def page_log():
                  "из этих строк, поэтому любой его пункт можно проследить до работы и строки.",
                  "Әр жол — «оқушы · не байқалды · дәлел қайда». Портрет әр жолы осы жолдардан қайта есептеледі, "
                  "сондықтан кез келген тармағын жұмыс пен жолға дейін қадағалауға болады."))
+    if no_students():
+        return
     studs = students()
     c = st.columns(3)
     who = c[0].selectbox(L("Ученик", "Оқушы"), [0] + [s["id"] for s in studs],
@@ -686,7 +747,8 @@ def page_log():
                     o.source, o.confidence FROM observations o JOIN students st ON st.id = o.student_id
              LEFT JOIN submissions s ON s.id = o.submission_id LEFT JOIN assignments a ON a.id = s.assignment_id
              LEFT JOIN problems p ON p.id = o.problem_id WHERE 1=1"""
-    args = []
+    vis, args = visible_filter("o.student_id")
+    sql += vis
     if who:
         sql += " AND o.student_id=?"; args.append(who)
     if src:
@@ -704,7 +766,7 @@ def page_log():
         L("Уверенность", "Сенімділік"): r["confidence"]} for r in rows])
     st.dataframe(df, hide_index=True, use_container_width=True, height=520)
     st.download_button(L("Скачать CSV", "CSV жүктеу"), df.to_csv(index=False).encode("utf-8-sig"),
-                       "observations.csv", "text/csv")
+                       "observations.csv", "text/csv", on_click=audit.log, args=(conn, user, "export_csv", "export"))
 
 
 def page_about():
@@ -782,5 +844,6 @@ digraph G { rankdir=LR; node [shape=box, style="rounded,filled", fillcolor="#eef
                   "нақты жұмыстар — тек келісіммен. Демода барлық оқушы ойдан шығарылған."))
 
 
-{"class": page_class, "portrait": page_portrait, "check": page_check, "log": page_log, "about": page_about}[page]()
+{"class": page_class, "portrait": page_portrait, "check": page_check, "log": page_log,
+ "manage": lambda: manage_view.render(conn, user, L, lang), "about": page_about}[page]()
 ss["_last_lang"] = lang
