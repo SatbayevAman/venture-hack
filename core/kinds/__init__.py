@@ -18,3 +18,7 @@ KINDS["inequality"] = inequality.check
 from . import system  # noqa: E402
 
 KINDS["system"] = system.check
+
+from . import biquadratic  # noqa: E402
+
+KINDS["biquadratic"] = biquadratic.check

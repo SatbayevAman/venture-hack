@@ -316,3 +316,71 @@ def test_system_questions():
     for tag in ("subst", "swap_xy"):
         assert all(T.TAGS[tag][f] for f in ("ru", "kk", "teacher_ru", "teacher_kk", "student_ru", "student_kk"))
     assert T.TAGS["substitution"]["kind"] == T.TAGS["addition"]["kind"] == "method"
+
+
+# ---------------------------------------------------------------- B2. биквадратные уравнения
+
+B1 = "x⁴ − 5x² + 4 = 0"
+B2 = "x⁴ + 2x² − 3 = 0"
+B1_T = ["Пусть x² = t, t ≥ 0", "t² − 5t + 4 = 0"]
+
+
+@pytest.mark.parametrize("statement,lines", [
+    (B1, B1_T + ["D = 25 − 16 = 9", "t₁ = (5 + 3)/2 = 4", "t₂ = (5 − 3)/2 = 1", "x² = 4 или x² = 1",
+                 "x = ±2, x = ±1", "Ответ: −2; −1; 1; 2"]),
+    # отрицательное t отброшено — верно
+    (B2, ["t = x²", "t² + 2t − 3 = 0", "t₁ = 1, t₂ = −3", "t = −3 не подходит", "x² = 1", "x = ±1", "Ответ: −1; 1"]),
+    # индексы x₁…x₄, «t1,2 = … ± …», «x3,4 = ±2»
+    (B1, ["x² = t", "t² − 5t + 4 = 0", "t₁ = 1, t₂ = 4", "x₁ = 1, x₂ = −1, x₃ = 2, x₄ = −2"]),
+    (B1, ["x² = t", "t² − 5t + 4 = 0", "t1,2 = (5 ± 3)/2", "x1,2 = ±1", "x3,4 = ±2", "Ответ: ±1; ±2"]),
+    # строка в x до замены; без замены — разложением
+    ("2x⁴ − 10x² + 8 = 0", ["x⁴ − 5x² + 4 = 0", "t = x²", "t² − 5t + 4 = 0", "t₁ = 1, t₂ = 4", "Ответ: ±1; ±2"]),
+    (B1, ["(x² − 1)(x² − 4) = 0", "x = ±1, x = ±2", "Ответ: −2; −1; 1; 2"]),
+])
+def test_biquadratic_correct(statement, lines):
+    r, t, _ = first("biquadratic", statement, lines, 6)
+    assert t is None and r.correct is True
+    assert sorted(r.true_answer) == sorted(r.final)
+
+
+@pytest.mark.parametrize("statement,lines,tag,line", [
+    # ошибка замены: уравнение в t не совпадает с уравнением в x
+    (B1, ["t = x²", "t² + 5t + 4 = 0"], "subst", 2),
+    ("2x⁴ − 10x² + 8 = 0", ["x⁴ − 5x² + 4 = 0", "t = x²", "t² − 10t + 8 = 0"], "subst", 3),
+    # забыт ±
+    (B1, ["t = x²", "t² − 5t + 4 = 0", "t₁ = 1, t₂ = 4", "x² = 1 или x² = 4", "x = 1, x = 2", "Ответ: 1; 2"], "lost_root", 6),
+    # не отброшено отрицательное t
+    (B2, ["t = x²", "t² + 2t − 3 = 0", "t₁ = 1, t₂ = −3", "x² = 1 или x² = −3", "x = ±1, x = ±√3", "Ответ: ±1; ±√3"], "neg_t", 5),
+    (B2, ["t = x²", "t² + 2t − 3 = 0", "t₁ = 1, t₂ = −3", "Ответ: ±1; ±√3"], "neg_t", 4),
+    # потерян корень в t
+    (B1, ["t = x²", "t² − 5t + 4 = 0", "t₁ = 4", "x = ±2", "Ответ: ±2"], "lost_root", 3),
+    # вычисления: D, обратная замена
+    (B1, ["t = x²", "t² − 5t + 4 = 0", "D = 25 − 16 = 7"], "calc", 3),
+    (B1, ["t = x²", "t² − 5t + 4 = 0", "t₁ = 1, t₂ = 4", "x² = 1 или x² = 4", "x = ±1, x = ±3"], "calc", 5),
+    # до замены: знак
+    ("2x⁴ − 10x² + 8 = 0", ["x⁴ − 5x² − 4 = 0"], "sign", 1),
+])
+def test_biquadratic_errors(statement, lines, tag, line):
+    _, t, ln = first("biquadratic", statement, lines, 6)
+    assert (t, ln) == (tag, line)
+
+
+def test_biquadratic_details_and_questions():
+    r = check_problem("biquadratic", B1, ["t = x²", "t² − 5t + 4 = 0", "t₁ = 1, t₂ = 4", "x = 1, x = 2", "Ответ: 1; 2"], 6)
+    assert r.first_error["detail"] == {"pm": True}
+    r2 = check_problem("biquadratic", B1, ["t = x²", "t² + 5t + 4 = 0"], 6)
+    assert r2.first_error["prev_line"] == 0 and r2.first_error["detail"]["change"]
+    r3 = check_problem("biquadratic", B2, ["t = x²", "t² + 2t − 3 = 0", "t₁ = 1, t₂ = −3", "x = ±1, x = ±√3"], 6)
+    assert r3.first_error["tag"] == "neg_t" and r3.first_error["prev_line"] == 2
+    for fe in (r.first_error, r2.first_error, r3.first_error):
+        for lang in ("ru", "kk"):
+            q = question_for(fe, lang)
+            assert q and "{" not in q and "±" not in q and "√3" not in q and "−1" not in q
+    assert T.SKILLS["biquadratic"]["kk"] and T.TAGS["neg_t"]["student_kk"]
+    assert T.TAGS["var_change"]["kind"] == "method"
+
+
+def test_biquadratic_t_segment_error_points_to_t_equation():
+    r = check_problem("biquadratic", B1, ["t = x²", "t² − 5t + 4 = 0", "t₁ = 2, t₂ = 3"], 6)
+    fe = r.first_error
+    assert (fe["tag"], fe["line"], fe["prev_line"]) == ("calc", 3, 2) and "t² − 5t + 4 = 0" in fe["evidence"]
