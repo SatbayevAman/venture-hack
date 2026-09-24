@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections import Counter, defaultdict
 
 from . import db, review, tags as T
@@ -87,6 +88,15 @@ def _ref(o: dict) -> dict:
             "obs_id": o["id"]}
 
 
+def _bkt_fields(conn, skill: str, tag: str, skill_works: list, hit: set) -> dict:
+    """PORTRAIT_MODEL=bkt: слабое место — случаев ≥ MIN_CASES и P(освоено) ≤ knowledge.BKT_MASTERED."""
+    from . import knowledge  # внутри функции: knowledge импортирует portrait
+    traj = knowledge.bkt_trajectory([int(w in hit) for w in reversed(skill_works)], knowledge.fit_for(conn, skill, tag))
+    mastery = traj[-1] if traj else None
+    return {"mastery": mastery,
+            "weak": len(hit) >= MIN_CASES and mastery is not None and mastery <= knowledge.BKT_MASTERED}
+
+
 def weighted_share(works: list, hit_ids: set) -> float:
     if not works:
         return 0.0
@@ -97,7 +107,9 @@ def weighted_share(works: list, hit_ids: set) -> float:
 
 # ---------------------------------------------------------------- портрет
 
-def build(conn, sid: int, lang: str = "ru") -> dict:
+def build(conn, sid: int, lang: str = "ru", model: str | None = None) -> dict:
+    """model: "weighted" (по умолчанию) или "bkt"; не задан — переменная окружения PORTRAIT_MODEL."""
+    model = model or os.environ.get("PORTRAIT_MODEL", "weighted")
     student = dict(db.q1(conn, "SELECT * FROM students WHERE id=?", (sid,)))
     works = _works(conn, sid)
     order = [w["id"] for w in works]  # новые первыми
@@ -129,6 +141,7 @@ def build(conn, sid: int, lang: str = "ru") -> dict:
             "skill": skill, "tag": tag, "count": len(hit), "total": len(skill_works), "p": p,
             "weak": len(hit) >= MIN_CASES and p >= MIN_SHARE,
             "low_data": len(hit) < MIN_CASES,
+            **(_bkt_fields(conn, skill, tag, skill_works, hit) if model == "bkt" else {}),
             "detail": DETAIL_TEXT[detail_key][lang] if detail_key else None,
             "refs": [_ref(o) for o in sorted(items, key=lambda o: o["created_at"], reverse=True)],
         })
@@ -308,6 +321,7 @@ def _rec_label(key: str, lang: str) -> str:
 # ---------------------------------------------------------------- карта класса
 
 def class_map(conn, lang: str = "ru") -> list[dict]:
+    from . import knowledge  # внутри функции: knowledge импортирует portrait
     rows = []
     for s in db.q(conn, "SELECT * FROM students ORDER BY id"):
         p = build(conn, s["id"], lang)
@@ -322,6 +336,8 @@ def class_map(conn, lang: str = "ru") -> list[dict]:
             sw = [w for w in order if w in by_skill.get(skill, set())]
             hit = auto_err.get(skill, set())
             cells[skill] = {"bad": len(hit & set(sw)), "total": len(sw), "p": weighted_share(sw, hit)}
+            # тренд: была ли в работе хоть одна ошибка навыка, от старых работ к новым
+            cells[skill]["trend"] = knowledge.trend([int(w in hit) for w in reversed(sw)])
         top = next((r for r in p["recs"]), None)
         watch = next((e for e in p["errors"] if e["low_data"]), None)
         rows.append({

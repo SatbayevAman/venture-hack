@@ -989,6 +989,9 @@ def check_expression(statement: str, raw_lines: list, reference_len: Optional[in
 
 
 def check_problem(kind: str, statement: str, raw_lines: list, reference_len=None, reference_answer=None) -> CheckResult:
+    from .kinds import KINDS  # импорт внутри функции: модули видов сами импортируют checker
+    if kind in KINDS:
+        return KINDS[kind](statement, raw_lines, reference_len, reference_answer)
     if kind == "expression":
         return check_expression(statement, raw_lines, reference_len, reference_answer)
     return check_equation(statement, raw_lines, reference_len)
