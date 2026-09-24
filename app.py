@@ -17,6 +17,7 @@ from core import db, llm, pipeline, portrait, seed
 from core import ocr, ocr_store
 from core import tags as T
 from core.tags import question_for, tag_comment_keywords
+from ui import dynamics as dynamics_view
 
 ROOT = Path(__file__).parent
 DB_PATH = os.environ.get("PORTRET_DB", str(ROOT / "data" / "portret.db"))
@@ -296,7 +297,7 @@ def page_class():
         for sk in skills:
             cell = r["cells"][sk]
             name = T.SKILLS_SHORT[sk][lang]
-            d[name] = f"{cell['bad']}/{cell['total']}" if cell["total"] else "—"
+            d[name] = dynamics_view.cell_text(cell)  # «4/6 ▼»: стрелка тренда, если он есть
             col[name] = heat(cell["p"]) if cell["total"] else ""
         chk, n = r["check"]
         d[L("Проверка ответа", "Жауапты тексеру")] = f"{chk}/{n}"
@@ -325,6 +326,8 @@ def page_class():
                  "«Проверка ответа» окрашена тем краснее, чем реже ученик проверяет.",
                  "Түс: жасыл — қате жоқтың қасы, қызыл — жаңа жұмыстардың 60 %-ынан көбінде қате. "
                  "«Жауапты тексеру» оқушы неғұрлым сирек тексерсе, соғұрлым қызыл."))
+    dynamics_view.legend(L)
+    dynamics_view.class_block(rows, L, lang)
 
     # что повторить со всем классом
     common = db.q(conn, """SELECT tag, skill, COUNT(DISTINCT student_id) n, COUNT(*) c FROM observations
@@ -471,6 +474,7 @@ def portrait_teacher(p: dict):
         if r["refs"]:
             st.markdown('<div class="ref">' + L("Опора: ", "Негіз: ") + esc("; ".join(ref_label(x) for x in r["refs"]))
                         + "</div>", unsafe_allow_html=True)
+        dynamics_view.rec_controls(conn, p["student"]["id"], r, L, lang, key=f"{p['student']['id']}_{r['key']}")
         st.write("")
     if len(recs) > 3:
         with st.expander(L(f"Ещё {len(recs) - 3}", f"Тағы {len(recs) - 3}")):
@@ -495,6 +499,8 @@ def portrait_teacher(p: dict):
             com = db.q(conn, "SELECT text FROM teacher_comments WHERE submission_id=?", (w["id"],))
             for cmt in com:
                 st.markdown(f"💬 *{esc(cmt['text'])}*")
+
+    dynamics_view.render_section(conn, p, L, lang)
 
 
 def portrait_student(p: dict):
