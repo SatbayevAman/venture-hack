@@ -2,7 +2,9 @@
 
 1. Где слаб: взвешенная доля работ с ошибкой (свежие весят больше, w = 0.8^k);
    слабое место — если случаев ≥ 3 и доля ≥ 40 %.
-2. Как решает: доли методов по квадратным уравнениям и частота привычек.
+2. Как решает: methods — дискриминант, Виет, разложение (знаменатель — работы с квадратными
+   уравнениями, в числителе — наблюдения метода любого навыка); methods_by_skill — методы
+   по каждому навыку (метод интервалов, подстановка, замена переменной…); частота привычек.
 3. Что говорит учитель: теги из комментариев с цитатами; совпадение с
    автопроверкой — «подтверждено дважды».
 4. Как работать: готовые советы из словаря тегов, привязанные к работам.
@@ -168,6 +170,17 @@ def build(conn, sid: int, lang: str = "ru", model: str | None = None) -> dict:
         c = len({s for (t, s) in mcount if t == m})
         methods.append({"tag": m, "count": c, "total": len(quad_works), "refs": mrefs[m]})
 
+    # методы по всем навыкам (новые темы Беты); знаменатель — работы с задачами этого навыка
+    mhit, mref = defaultdict(set), defaultdict(list)
+    for o in auto:
+        if o["kind"] == "method" and o["skill"] and T.TAGS.get(o["tag"], {}).get("kind") == "method":
+            mhit[(o["skill"], o["tag"])].add(o["submission_id"])
+            mref[(o["skill"], o["tag"])].append(_ref(o))
+    methods_by_skill = defaultdict(list)
+    for (skill, tag), subs in sorted(mhit.items()):
+        methods_by_skill[skill].append({"tag": tag, "count": len(subs), "total": len(by_skill.get(skill, set())),
+                                        "refs": mref[(skill, tag)]})
+
     habits = {}
     for h in ("check_done", "skip_steps", "late", "domain_noted"):
         items = [o for o in auto if o["kind"] == "habit" and o["tag"] == h]
@@ -258,8 +271,11 @@ def build(conn, sid: int, lang: str = "ru", model: str | None = None) -> dict:
     return {
         "student": student, "n_works": n, "works": works,
         "errors": errors, "strengths": strengths, "methods": methods, "habits": habits,
+        "methods_by_skill": dict(methods_by_skill),
         "check_rate": check_rate, "teacher": teacher_items, "recs": recs,
-        "n_obs": len(obs), "has_live": any(w["source"] == "live" for w in works),
+        # все строки журнала ученика, как счётчик карты класса: не зависит от отметок и включает тренажёр
+        "n_obs": db.q1(conn, "SELECT COUNT(*) c FROM observations WHERE student_id=?", (sid,))["c"],
+        "has_live": any(w["source"] == "live" for w in works),
     }
 
 

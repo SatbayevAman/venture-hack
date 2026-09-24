@@ -93,10 +93,3 @@ def stats(conn, submission_id=None) -> dict:
         "edited_among_unsure": share(edited_unsure, len(unsure)),
         "unsure_among_edited": share(edited_unsure, edited),  # полнота флага: правки, которые мы предсказали
     }
-
-
-def delete_submission(conn, submission_id: int) -> None:
-    """Для повторной живой проверки той же работы: убрать прежние строки распознавания."""
-    ensure_schema(conn)
-    conn.execute("DELETE FROM ocr_lines WHERE submission_id=?", (submission_id,))
-    conn.commit()

@@ -206,7 +206,8 @@ def fit_for(conn, skill: str, tag: str) -> BKTParams:
 
 
 def mastery(conn, student_id: int, skill: str, tag: str, params: Optional[BKTParams] = None) -> dict:
-    """Траектория BKT ученика по паре (навык, тег) с параметрами, подобранными по классу."""
+    """Траектория BKT ученика по паре (навык, тег) с параметрами, подобранными по всем ученикам базы
+    (class_sequences: при нескольких классах — не только по классу ученика)."""
     seq = sequence(conn, student_id, skill, tag)
     prm = params or fit_for(conn, skill, tag)
     traj = bkt_trajectory(seq, prm)

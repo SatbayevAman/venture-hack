@@ -5,7 +5,8 @@
 («?» в тексте и список unsure), дальше — правила:
 
 * «?» или непустой unsure              → флаг illegible,  не выше 0.4;
-* строка не разбирается SymPy          → флаг unparsable, не выше 0.3;
+* строка не разбирается SymPy          → флаг unparsable, не выше 0.3
+  (для видов задач из core.kinds решает parses модуля вида: score_lines(lines, kind));
 * два прочтения разошлись (passes=2)   → флаг disagree,   не выше 0.5;
 * иначе                                → 0.95.
 
@@ -83,6 +84,7 @@ _SIMPLE = (
     (r"\\leq?\b", "≤"), (r"\\geq?\b", "≥"), (r"\\neq?\b", "≠"),
     (r"\\sqrt\b\s*", "√"),
     (r"\\varnothing\b|\\emptyset\b", "∅"),
+    (r"\\infty\b", "∞"), (r"\\cup\b", "∪"), (r"\\in\b", "∈"),   # промежутки и объединения (неравенства)
     (r"\\Rightarrow\b|\\implies\b|\\to\b", "⇒"),
     (r"\\[,;:!]|\\quad\b|\\qquad\b|~", " "),
 )
@@ -95,6 +97,8 @@ def clean_text(text: str) -> str:
     встречается в ответах vision-моделей: обрывки LaTeX и лишние пробелы."""
     s = str(text or "")
     s = s.replace("$", "")
+    # скобки множества и системы: иначе остаётся «\ »; пробел, а не пусто — чтобы «\cup\{3\}» не склеилось в «\cup3»
+    s = s.replace("\\{", " ").replace("\\}", " ")
     # \text{Ответ}: → Ответ:, \mathrm{D} → D
     s = re.sub(r"\\(?:text|mathrm|mbox|textbf)\s*\{([^{}]*)\}", r"\1", s)
     s = _frac_sqrt(s)
@@ -136,8 +140,22 @@ def is_unparsable(text: str) -> bool:
     return False
 
 
-def score_line(line) -> dict:
-    """{'text', 'unsure'[, 'alternatives']} → та же строка + confidence и flags."""
+def _unparsable(text: str, kind=None) -> bool:
+    """Вид задачи из core.kinds (неравенство, система, …) сам решает, разбирается ли строка:
+    «x ∈ [−2; 3]», «+ − +», «(3; 2)» — верная запись, а не ошибка распознавания."""
+    if kind:
+        from .kinds import KINDS, PARSES  # внутри функции: модули видов импортируют checker
+        if kind in KINDS and kind in PARSES:
+            try:
+                return not PARSES[kind](text)
+            except Exception:  # noqa: BLE001 — любая ошибка разбора = строку нужно проверить
+                return True
+    return is_unparsable(text)
+
+
+def score_line(line, kind=None) -> dict:
+    """{'text', 'unsure'[, 'alternatives']} → та же строка + confidence и flags.
+    kind — вид задачи (problems.kind); без него — общий разбор, как раньше."""
     if isinstance(line, str):
         line = {"text": line, "unsure": []}
     out = dict(line)
@@ -148,7 +166,7 @@ def score_line(line) -> dict:
     if "?" in text or out["unsure"]:
         flags.append("illegible")
         conf = min(conf, ILLEGIBLE_MAX)
-    if is_unparsable(text):
+    if _unparsable(text, kind):
         flags.append("unparsable")
         conf = min(conf, UNPARSABLE_MAX)
     alts = [a for a in (out.get("alternatives") or [])]
@@ -160,8 +178,8 @@ def score_line(line) -> dict:
     return out
 
 
-def score_lines(lines: list) -> list:
-    return [score_line(l) for l in lines]
+def score_lines(lines: list, kind=None) -> list:
+    return [score_line(l, kind) for l in lines]
 
 
 def needs_review(line: dict) -> bool:

@@ -33,9 +33,15 @@ def _sync(name: str, wkey: str):
     return lambda: ss.__setitem__(name, ss[wkey])
 
 
+def _gated(conn, sid: int, cb):
+    """Колбэк кнопки пишет в базу, только если согласие ещё есть: его могли отозвать, пока страница открыта."""
+    return lambda: cb() if practice.can_practice(conn, sid) else None
+
+
 # ------------------------------------------------------------------ страница
 
-def render(conn, L, lang, esc, badge, render_lines, students):
+def render(conn, L, lang, esc, badge, render_lines, students, role=None):
+    """role — роль пользователя; ученику сводка по классу не показывается."""
     practice.ensure_schema(conn)
     st.title(L("🧩 Тренажёр", "🧩 Жаттықтырғыш"))
     st.caption(L("Разбор своей ошибки и задачи под слабое место. Подсказки идут по ступеням: вопрос → правило → "
@@ -53,6 +59,17 @@ def render(conn, L, lang, esc, badge, render_lines, students):
     k = _wkey("student_id", studs[0]["id"], lang, list(alias))
     sid = c[0].selectbox(L("Ученик", "Оқушы"), list(alias), key=k, format_func=lambda i: alias[i],
                          on_change=_sync("student_id", k))
+    if not practice.can_practice(conn, sid):  # без согласия — ни сессий, ни попыток, ни исходов в журнале
+        if role == "student":
+            st.warning(L("Тренажёр пока недоступен: нет согласия на анализ твоих работ. Обратись к учителю.",
+                         "Жаттықтырғыш әзірге қолжетімсіз: жұмыстарыңды талдауға келісім жоқ. Мұғаліміңе хабарлас."))
+        else:
+            st.warning(L("Нет согласия на анализ работ этого ученика — тренажёр недоступен, решения и исходы не "
+                         "записываются. Отметьте согласие по бумажной форме: «🛡️ Управление» → «Согласия».",
+                         "Бұл оқушының жұмыстарын талдауға келісім жоқ — жаттықтырғыш қолжетімсіз, шешімдер мен "
+                         "нәтижелер жазылмайды. Келісімді қағаз нысаны бойынша белгілеңіз: «🛡️ Басқару» → «Келісімдер»."))
+        _teacher_block(conn, L, lang, esc, badge, studs, role)
+        return
     modes = ["fix_own", "weak_spot"]
     k = _wkey("pr_mode", "fix_own", lang, modes)
     mode = c[1].radio(L("Режим", "Режим"), modes, key=k, horizontal=True, on_change=_sync("pr_mode", k),
@@ -67,6 +84,12 @@ def render(conn, L, lang, esc, badge, render_lines, students):
     else:
         _weak_spot(conn, L, lang, esc, badge, render_lines, sid)
 
+    _teacher_block(conn, L, lang, esc, badge, studs, role)
+
+
+def _teacher_block(conn, L, lang, esc, badge, studs, role):
+    if role == "student":
+        return
     st.divider()
     with st.expander(L("👩‍🏫 Для учителя: сводка по классу", "👩‍🏫 Мұғалімге: сынып бойынша жиынтық")):
         _class_block(conn, L, lang, esc, badge, studs)
@@ -227,7 +250,7 @@ def _fix_own(conn, L, lang, esc, badge, render_lines, sid: int):
                      key=key, height=140)
         b = st.columns([1, 1, 2])
         b[0].button(L("Проверить", "Тексеру"), type="primary", use_container_width=True, key=f"{key}_chk",
-                    on_click=_on_check(conn, run, ensure_item, key))
+                    on_click=_gated(conn, sid, _on_check(conn, run, ensure_item, key)))
         cur = run["item_id"]
         if run["hint"].get(cur, 0) < 3:
             b[1].button(L("💡 Ещё подсказка", "💡 Тағы көмек"), use_container_width=True, key=f"{key}_hint",
@@ -267,7 +290,7 @@ def _weak_spot(conn, L, lang, esc, badge, render_lines, sid: int):
                 ss[rkey] = _new_run(session_id, ids, "weak_spot")
 
         st.button(L("Подобрать задания", "Тапсырмаларды таңдау") if run is None else L("Ещё набор", "Тағы бір топтама"),
-                  type="primary", on_click=start)
+                  type="primary", on_click=_gated(conn, sid, start))
         return
     _runner(conn, L, lang, esc, badge, render_lines, run, rkey)
 
@@ -291,7 +314,7 @@ def _runner(conn, L, lang, esc, badge, render_lines, run: dict, rkey: str):
     b = st.columns([1, 1, 1, 1])
     if not item["solved"]:
         b[0].button(L("Проверить", "Тексеру"), type="primary", use_container_width=True, key=f"{key}_chk",
-                    on_click=_on_check(conn, run, lambda: item_id, key))
+                    on_click=_gated(conn, item["student_id"], _on_check(conn, run, lambda: item_id, key)))
         if run["fe"].get(item_id) and run["hint"].get(item_id, 0) < 3:
             b[1].button(L("💡 Ещё подсказка", "💡 Тағы көмек"), use_container_width=True, key=f"{key}_hint",
                         on_click=_on_hint(run, item_id))
@@ -304,7 +327,7 @@ def _runner(conn, L, lang, esc, badge, render_lines, run: dict, rkey: str):
             practice.finish_session(conn, run["session_id"])
 
     b[3].button(L("Дальше →", "Келесі →") if item["solved"] else L("Пропустить", "Өткізіп жіберу"),
-                use_container_width=True, key=f"{key}_next", on_click=nxt)
+                use_container_width=True, key=f"{key}_next", on_click=_gated(conn, item["student_id"], nxt))
     _feedback(L, lang, esc, badge, render_lines, run, item)
 
 
@@ -326,7 +349,7 @@ def _reviews(conn, L, lang, esc, sid: int):
             ss[f"pr_run_{sid}"] = _new_run(session_id, ids, "review")
             ss["pr_mode"] = "weak_spot"
 
-        c[1].button(L("Повторить", "Қайталау"), type="primary", use_container_width=True, on_click=start)
+        c[1].button(L("Повторить", "Қайталау"), type="primary", use_container_width=True, on_click=_gated(conn, sid, start))
     elif rv["later"]:
         st.caption(L("🔁 Следующее повторение: ", "🔁 Келесі қайталау: ") + rv["later"][0]["due_at"][:10])
 
@@ -390,6 +413,7 @@ def render_portrait_block(conn, student_id: int, L, lang):
         with st.expander(L(f"Доказательства из журнала ({len(s['refs'])})", f"Журналдағы дәлелдер ({len(s['refs'])})")):
             for r in s["refs"][:12]:
                 st.markdown(f"- {esc(r['created_at'][:16])} · **{esc(T.name(r['tag'], lang))}** · "
-                            + L(f"ступень {r['hint_level']}", f"{r['hint_level']}-саты") + f" — `{esc(r['evidence'])}`")
+                            + L(f"ступень {r['hint_level']}", f"{r['hint_level']}-саты") + f" — <code>{esc(r['evidence'])}</code>",
+                            unsafe_allow_html=True)
     st.caption(L("Источник — журнал наблюдений (source = practice). В числа портрета выше тренировки не входят.",
                  "Дереккөзі — бақылау журналы (source = practice). Жаттығулар жоғарыдағы портрет сандарына кірмейді."))

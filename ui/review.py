@@ -11,7 +11,7 @@ import time
 import pandas as pd
 import streamlit as st
 
-from core import db, quality, review
+from core import audit, auth, db, quality, review
 from core import tags as T
 
 TIMER_RESET = 30 * 60   # «Проверить» позже чем через 30 мин после первого — это уже новая проверка
@@ -31,30 +31,48 @@ def _pct(x) -> str:
 
 # ---------------------------------------------------------------- отметка на выводе
 
-def mark_label(m: dict | None, L) -> str:
-    """Короткая подпись последней отметки — для бейджа и колонки журнала."""
+def reviewer_name(conn, reviewer, cache: dict | None = None) -> str:
+    """Кто поставил отметку: reviewer — id пользователя строкой (Дзета B5) → его display_name;
+    прежние отметки хранят свободный текст («учитель») — он показывается как есть."""
+    r = str(reviewer or "")
+    if conn is None or not r.isdigit():
+        return r
+    cache = {} if cache is None else cache
+    if r not in cache:
+        u = auth.get_user(conn, int(r))
+        cache[r] = u["display_name"] if u else r
+    return cache[r]
+
+
+def mark_label(m: dict | None, L, conn=None, cache: dict | None = None) -> str:
+    """Короткая подпись последней отметки — для бейджа и колонки журнала.
+    С conn к отметке пользователя (числовой reviewer) дописывается его имя."""
     if not m:
         return ""
     if m["verdict"] == "confirm":
-        return L("✓ верно", "✓ дұрыс")
-    if m["verdict"] == "reject":
-        return L("✗ неверно", "✗ дұрыс емес")
-    return L("↻ другой тег: ", "↻ басқа тег: ") + T.name(m["new_tag"], _lang(L))
+        out = L("✓ верно", "✓ дұрыс")
+    elif m["verdict"] == "reject":
+        out = L("✗ неверно", "✗ дұрыс емес")
+    else:
+        out = L("↻ другой тег: ", "↻ басқа тег: ") + T.name(m["new_tag"], _lang(L))
+    if conn is not None and str(m.get("reviewer") or "").isdigit():
+        out += " · " + reviewer_name(conn, m["reviewer"], cache)
+    return out
 
 
-def mark_badge(m: dict | None, L) -> str:
+def mark_badge(m: dict | None, L, conn=None) -> str:
     if not m:
         return f'<span class="badge b-low">{_e(L("нет отметки учителя", "мұғалім белгісі жоқ"))}</span>'
     cls = {"confirm": "b-ok", "reject": "b-weak", "retag": "b-conf"}[m["verdict"]]
     extra = ""
     if m["verdict"] == "reject":
         extra = L(" · не учитывается в портрете", " · портретте ескерілмейді")
-    who = f'{m.get("reviewer") or ""}, {str(m.get("created_at") or "")[:16]}'.strip(", ")
+    who = f'{reviewer_name(conn, m.get("reviewer"))}, {str(m.get("created_at") or "")[:16]}'.strip(", ")
     note = f' <span class="muted">«{_e(m["comment"])}»</span>' if m.get("comment") else ""
-    return f'<span class="badge {cls}" title="{_e(who)}">{_e(mark_label(m, L) + extra)}</span>{note}'
+    return f'<span class="badge {cls}" title="{_e(who)}">{_e(mark_label(m, L, conn) + extra)}</span>{note}'
 
 
-def controls(conn, obs_id, L, key: str) -> None:
+def controls(conn, obs_id, L, key: str, reviewer=None) -> None:
     """Три кнопки на выводе: «✓ верно», «✗ неверно», «↻ другой тег» + необязательный комментарий."""
     if obs_id is None:
         return
@@ -64,7 +82,7 @@ def controls(conn, obs_id, L, key: str) -> None:
     lang = _lang(L)
     m = review.latest(conn, [obs_id]).get(obs_id)
     st.markdown(f'<div class="muted" style="margin:2px 0 4px 0">{_e(L("Отметка учителя:", "Мұғалім белгісі:"))} '
-                f'{mark_badge(m, L)}</div>', unsafe_allow_html=True)
+                f'{mark_badge(m, L, conn)}</div>', unsafe_allow_html=True)
     c = st.columns([1, 1, 1.25, 2.6])
     comment = c[3].text_input(L("Комментарий", "Пікір"), key=f"{key}_c", label_visibility="collapsed",
                               placeholder=L("комментарий (необязательно)", "пікір (міндетті емес)"))
@@ -84,7 +102,7 @@ def controls(conn, obs_id, L, key: str) -> None:
             verdict, new_tag = "retag", new
     if verdict:
         try:
-            review.add(conn, obs_id, verdict, new_tag=new_tag, comment=comment)
+            review.add(conn, obs_id, verdict, new_tag=new_tag, comment=comment, reviewer=reviewer)
         except ValueError as ex:
             st.error(str(ex))
             return
@@ -92,9 +110,10 @@ def controls(conn, obs_id, L, key: str) -> None:
         st.rerun()
 
 
-def precision_badge(conn, tag: str, L) -> str:
-    """Бейдж «требует проверки», если по отметкам учителя правило для тега часто ошибается."""
-    d = quality.tag_status(conn, tag)
+def precision_badge(conn, tag: str, L, student_ids=None) -> str:
+    """Бейдж «требует проверки», если по отметкам учителя правило для тега часто ошибается.
+    student_ids — те же ученики, что на странице «Качество» у этого пользователя."""
+    d = quality.tag_status(conn, tag, student_ids=student_ids)
     if not d or not d["needs_review"]:
         return ""
     text = L(f"требует проверки: точность {_pct(d['precision'])}, отметок: {d['reviewed']}",
@@ -119,7 +138,7 @@ def not_error_toggle(aid: int, pid: int, L) -> None:
                 key=f"eps_noterr_{aid}_{pid}")
 
 
-def after_record(conn, ss, sub_id: int, sid: int, aid: int, chk: dict, L) -> None:
+def after_record(conn, ss, sub_id: int, sid: int, aid: int, chk: dict, L, reviewer=None) -> None:
     """После записи в журнал: время проверки и отметки «это не ошибка»."""
     t = ss.pop("eps_timer", None)
     if t and (t["sid"], t["aid"]) == (sid, aid):
@@ -128,10 +147,11 @@ def after_record(conn, ss, sub_id: int, sid: int, aid: int, chk: dict, L) -> Non
                               n_lines=sum(len(r.lines) for r in res.values()))
     pids = [pid for pid in (chk.get("results") or {}) if ss.pop(f"eps_noterr_{aid}_{pid}", False)]
     if pids:
-        review.reject_errors(conn, sub_id, pids, comment=L("до записи: это не ошибка", "жазар алдында: бұл қате емес"))
+        review.reject_errors(conn, sub_id, pids, comment=L("до записи: это не ошибка", "жазар алдында: бұл қате емес"),
+                             reviewer=reviewer)
 
 
-def submission_controls(conn, sub_id, L) -> None:
+def submission_controls(conn, sub_id, L, reviewer=None) -> None:
     """Отметки для ошибок только что записанной работы и для тегов из комментария учителя."""
     if not sub_id:
         return
@@ -145,38 +165,39 @@ def submission_controls(conn, sub_id, L) -> None:
                        "✓ ✗ Тексеру қорытындыларын белгілеңіз — портрет қайта есептеледі"), expanded=True):
         for o in errs:
             where = L(f"№{o['problem_idx']}, строка {o['line_no']}", f"№{o['problem_idx']}, {o['line_no']}-жол")
-            st.markdown(f"**{_e(where)}: {_e(T.name(o['tag'], lang))}** — `{_e(o['evidence'])}`",
+            st.markdown(f"**{_e(where)}: {_e(T.name(o['tag'], lang))}** — <code>{_e(o['evidence'])}</code>",
                         unsafe_allow_html=True)
-            controls(conn, o["id"], L, key=f"eps_sub_{o['id']}")
+            controls(conn, o["id"], L, key=f"eps_sub_{o['id']}", reviewer=reviewer)
         if tchr:
             st.markdown("**" + L("Теги из комментария учителя", "Мұғалім пікіріндегі тегтер") + "**")
             for o in tchr:
                 st.markdown(f"«{_e(o['evidence'])}» → **{_e(T.name(o['tag'], lang))}**", unsafe_allow_html=True)
-                controls(conn, o["id"], L, key=f"eps_sub_{o['id']}")
+                controls(conn, o["id"], L, key=f"eps_sub_{o['id']}", reviewer=reviewer)
 
 
 # ---------------------------------------------------------------- журнал
 
 def log_marks(conn, ids, L) -> dict:
     """{observation_id: подпись последней отметки} — для колонки «Отметка учителя»."""
-    return {i: mark_label(m, L) for i, m in review.latest(conn, ids).items()}
+    cache: dict = {}
+    return {i: mark_label(m, L, conn, cache) for i, m in review.latest(conn, ids).items()}
 
 
-def log_controls(conn, row, L) -> None:
+def log_controls(conn, row, L, reviewer=None) -> None:
     """Отметка выбранной строки журнала."""
     lang = _lang(L)
-    st.markdown(f"**{_e(row['alias'])} · {_e(T.name(row['tag'], lang))}** — `{_e(row['evidence'])}`",
+    st.markdown(f"**{_e(row['alias'])} · {_e(T.name(row['tag'], lang))}** — <code>{_e(row['evidence'])}</code>",
                 unsafe_allow_html=True)
     if row["source"] not in ("auto", "teacher"):
         st.caption(L("Отметки ставятся на выводы автопроверки и теги из комментариев.",
                      "Белгілер автотексеру қорытындыларына және пікір тегтеріне қойылады."))
         return
-    controls(conn, row["id"], L, key=f"eps_log_{row['id']}")
+    controls(conn, row["id"], L, key=f"eps_log_{row['id']}", reviewer=reviewer)
 
 
 # ---------------------------------------------------------------- похожесть портрета (B3)
 
-def rating_form(conn, p: dict, L) -> None:
+def rating_form(conn, p: dict, L, reviewer=None) -> None:
     lang = _lang(L)
     sid = p["student"]["id"]
     items = {}
@@ -206,24 +227,27 @@ def rating_form(conn, p: dict, L) -> None:
                 if score is None:
                     st.warning(L("Выберите оценку от 1 до 5.", "1-ден 5-ке дейін баға таңдаңыз."))
                 else:
-                    review.add_rating(conn, sid, score, wrong, comment)
+                    review.add_rating(conn, sid, score, wrong, comment, reviewer=reviewer)
                     st.success(L("Оценка сохранена — она попадёт на страницу «Качество».",
                                  "Баға сақталды — ол «Сапа» бетіне түседі."))
 
 
 # ---------------------------------------------------------------- страница «Качество»
 
-def render_quality(conn, L, lang: str, esc) -> None:
+def render_quality(conn, L, lang: str, esc, student_ids=None, user=None) -> None:
+    """student_ids — ученики, видимые пользователю (auth.visible_student_ids); None — все.
+    user — для журнала действий: каждая выгрузка со страницы пишется как export_quality."""
+    logged = {"on_click": audit.log, "args": (conn, user, "export_quality", "export")}
     st.title(L("Качество выводов", "Қорытындылар сапасы"))
     st.caption(L("Все цифры — только из отметок учителя и замеров в этом приложении, ничего не оценивается «на глаз». "
                  "Отметки ставятся в доказательствах портрета, на экране проверки после записи и в журнале.",
                  "Барлық сан — тек мұғалім белгілері мен осы қосымшадағы өлшеулерден, ештеңе «көзбен» бағаланбайды. "
                  "Белгілер портрет дәлелдерінде, жазғаннан кейін тексеру экранында және журналда қойылады."))
-    rows = quality.tag_precision(conn)
+    rows = quality.tag_precision(conn, student_ids=student_ids)
     ov = quality.overall_precision(rows)
     ev = quality.eval_accuracy()
-    tm = quality.timing_summary(conn)
-    rs = review.rating_summary(conn)
+    tm = quality.timing_summary(conn, student_ids)
+    rs = review.rating_summary(conn, student_ids)
 
     c = st.columns(4)
     c[0].metric(L("Точность правил по отметкам", "Белгілер бойынша ережелер дәлдігі"),
@@ -256,7 +280,7 @@ def render_quality(conn, L, lang: str, esc) -> None:
                      f"{quality.REVIEWS_MIN} отметках. Меньше отметок — статус не ставится.",
                      f"«Тексеруді қажет етеді» — кемінде {quality.REVIEWS_MIN} белгіде дәлдік "
                      f"{_pct(quality.PRECISION_MIN)}-дан төмен. Белгі аз болса — күй қойылмайды."))
-    trows = quality.tag_precision(conn, "teacher")
+    trows = quality.tag_precision(conn, "teacher", student_ids)
     if trows:
         st.markdown("**" + L("Теги из комментариев учителя (разметка моделью или словарём)",
                              "Мұғалім пікірлеріндегі тегтер (модель не сөздік белгілеген)") + "**")
@@ -268,7 +292,7 @@ def render_quality(conn, L, lang: str, esc) -> None:
     show_all = st.checkbox(L("Показать отклонённые случаи по всем тегам", "Барлық тег бойынша қабылданбаған жағдайларды көрсету"),
                            value=not bad, key="eps_q_all")
     tags = None if show_all else bad
-    cases = quality.rejected_cases(conn, tags) if (show_all or bad) else []
+    cases = quality.rejected_cases(conn, tags, student_ids=student_ids) if (show_all or bad) else []
     if not cases:
         st.caption(L("Нет тегов со статусом «требует проверки» и отклонённых случаев.",
                      "«Тексеруді қажет етеді» күйіндегі тег және қабылданбаған жағдай жоқ."))
@@ -285,10 +309,10 @@ def render_quality(conn, L, lang: str, esc) -> None:
                         L("↻ другой тег: ", "↻ басқа тег: ") + T.name(x["new_tag"], lang)
                     note = f" — «{esc(x['review_comment'])}»" if x.get("review_comment") else ""
                     st.markdown(f"- **{esc(verdict)}** · {esc(where)} · {esc(x.get('alias'))}: "
-                                f"`{esc(x['evidence'])}`{note}", unsafe_allow_html=True)
+                                f"<code>{esc(x['evidence'])}</code>{note}", unsafe_allow_html=True)
         st.download_button(L("Скачать как markdown", "Markdown ретінде жүктеу"),
-                           quality.candidates_markdown(conn, lang, tags).encode("utf-8"),
-                           "rule_candidates.md", "text/markdown")
+                           quality.candidates_markdown(conn, lang, tags, student_ids).encode("utf-8"),
+                           "rule_candidates.md", "text/markdown", **logged)
 
     # ---- 3. размеченные работы
     st.header(L("3. Точность на размеченных работах", "3. Белгіленген жұмыстардағы дәлдік"))
@@ -297,6 +321,11 @@ def render_quality(conn, L, lang: str, esc) -> None:
                   "строки решения как в тетради, номер первой неверной строки и тег ошибки.",
                   "eval/labels.csv файлы жоқ. Оны eval/README.md нұсқаулығы бойынша толтырыңыз: бір жол — бір есеп, "
                   "шешім жолдары дәптердегідей, алғашқы қате жолдың нөмірі және қате тегі."))
+    elif not ev["n"] and ev.get("n_draft"):  # O14: черновики не считаются — как в `python evaluate.py`
+        st.info(L(f"В eval/labels.csv только черновики ({ev['n_draft']}): проверьте эталон по фото и уберите пометку "
+                  "draft — см. eval/README.md.",
+                  f"eval/labels.csv-те тек нобайлар ({ev['n_draft']}): эталонды фото бойынша тексеріп, draft белгісін "
+                  "алып тастаңыз — eval/README.md қараңыз."))
     elif not ev["n"]:
         st.info(L("В eval/labels.csv нет строк — см. eval/README.md.", "eval/labels.csv-те жол жоқ — eval/README.md қараңыз."))
     else:
@@ -312,7 +341,9 @@ def render_quality(conn, L, lang: str, esc) -> None:
             hide_index=True, use_container_width=True)
         st.caption(L("Та же цифра, что даёт `python evaluate.py` (без распознавания фото). "
                      "Разметка — eval/labels.csv, инструкция — eval/README.md.",
-                     "`python evaluate.py` беретін сан (фото танусыз). Белгілеу — eval/labels.csv, нұсқаулық — eval/README.md."))
+                     "`python evaluate.py` беретін сан (фото танусыз). Белгілеу — eval/labels.csv, нұсқаулық — eval/README.md.")
+                   + (L(f" Черновиков пропущено: {ev['n_draft']}.", f" Өткізілген нобайлар: {ev['n_draft']}.")
+                      if ev.get("n_draft") else ""))
 
     # ---- 4. время проверки
     st.header(L("4. Время проверки", "4. Тексеру уақыты"))
@@ -357,15 +388,15 @@ def render_quality(conn, L, lang: str, esc) -> None:
 
     # ---- 6. выгрузка
     st.header(L("6. Цифры для слайда", "6. Слайдқа арналған сандар"))
-    md = quality.metrics_markdown(conn, lang)
+    md = quality.metrics_markdown(conn, lang, student_ids)
     with st.expander(L("Предпросмотр", "Алдын ала қарау")):
         st.markdown(md)
     c1, c2 = st.columns(2)
     c1.download_button(L("Скачать метрики (markdown)", "Метрикаларды жүктеу (markdown)"), md.encode("utf-8"),
-                       "quality_metrics.md", "text/markdown", use_container_width=True)
+                       "quality_metrics.md", "text/markdown", use_container_width=True, **logged)
     c2.download_button(L("Скачать метрики (CSV)", "Метрикаларды жүктеу (CSV)"),
-                       quality.metrics_csv(conn).encode("utf-8-sig"), "quality_metrics.csv", "text/csv",
-                       use_container_width=True)
+                       quality.metrics_csv(conn, student_ids).encode("utf-8-sig"), "quality_metrics.csv", "text/csv",
+                       use_container_width=True, **logged)
 
 
 def _precision_df(rows, L, lang) -> pd.DataFrame:

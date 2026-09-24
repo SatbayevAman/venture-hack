@@ -5,20 +5,25 @@
    — CER — доля посимвольных ошибок по нормализованным строкам;
    — флаги «требует проверки»: сколько строк помечено и сколько из них действительно
      ошибочны; какая доля ошибочных строк попала под флаг (калибровка ocr.UNSURE);
+     строки оцениваются с учётом вида задачи: ocr.score_lines(lines, kind);
    — время распознавания одного фото.
 2. Первая ошибка (строка и тег):
-   — на эталонных строках (качество проверки SymPy),
+   — на эталонных строках (качество проверки SymPy; quality.reference_accuracy — та же функция,
+     что у страницы «Качество»),
    — на распознанных строках (весь путь целиком, цель G2 ≥ 80 %).
 
-Разметка: eval/labels.csv (UTF-8), по строке на задачу:
+Разметка: eval/labels.csv (UTF-8), по строке на задачу; подробно — eval/README.md:
     photo            — путь к фото относительно папки eval/ (можно пусто: тогда только проверка)
     problem          — номер задачи на фото (необязательно, по умолчанию 1): для фото с несколькими задачами
-    kind             — equation | expression
-    statement        — условие, например  x² = 5x
+    kind             — equation | expression | inequality | system | biquadratic (core/kinds, названия — tags.KIND_NAMES)
+    statement        — условие, например  x² = 5x;  у системы уравнения через «;»:  2x + y = 7; x − y = 2
     lines            — эталонные строки решения через « | » (как написано в тетради)
     error_line       — номер первой неверной строки (0, если решение верное)
-    error_tag        — тег ошибки (lost_root, extra_root, sign, fsu, calc, other) или пусто
-    status           — необязательно; draft — черновик из --draft, человек ещё не проверил эталон
+    error_tag        — тег ошибки из tags.TAGS (kind == "error") или пусто: lost_root, extra_root, sign, fsu,
+                       calc, other, ineq_flip, ineq_div_var, interval_choice, boundary, subst, swap_xy,
+                       neg_t, cancel_terms
+    status           — необязательно; draft — черновик из --draft, человек ещё не проверил эталон;
+                       черновики пропускаются в точности и считаются
 
 Запуск:
     python evaluate.py                                   # только проверка на эталонных строках
@@ -26,6 +31,7 @@
     python evaluate.py --ocr --passes 2                  # два прочтения
     python evaluate.py --ocr --out eval/results.md       # таблица для слайда
     python evaluate.py --draft photos/07.jpg --statement "x² = 5x" [--kind equation] [--problem 1]
+    --labels ПУТЬ — другой файл разметки (по умолчанию eval/labels.csv)
 """
 from __future__ import annotations
 
@@ -36,8 +42,9 @@ import time
 from datetime import date
 from pathlib import Path
 
-from core import llm, ocr
+from core import llm, ocr, quality
 from core.checker import check_problem, normalize
+from core.kinds import KINDS
 
 ROOT = Path(__file__).parent / "eval"
 FIELDS = ["photo", "problem", "kind", "statement", "lines", "error_line", "error_tag", "status"]
@@ -97,12 +104,13 @@ def recognize_photo(cfg, photo: str, rows: list, passes: int) -> tuple[dict, flo
     """Одно фото → {номер задачи: [строки с confidence и flags]}, секунды."""
     data = (ROOT / photo).read_bytes()
     problems = sorted({(int(r.get("problem") or 1), r["statement"]) for r in rows})
+    kinds = {int(r.get("problem") or 1): r.get("kind") for r in rows}
     t0 = time.perf_counter()
     det = llm.recognize_detailed(cfg, data, problems, passes=passes)
     secs = time.perf_counter() - t0
     out = {}
     for idx, lines in det.items():
-        out[idx] = ocr.score_lines([{**l, "text": ocr.clean_text(l["text"])} for l in lines])
+        out[idx] = ocr.score_lines([{**l, "text": ocr.clean_text(l["text"])} for l in lines], kinds.get(idx))
     return out, secs
 
 
@@ -141,7 +149,7 @@ def main() -> None:
     ap.add_argument("--out", help="записать таблицу результатов в markdown (например, eval/results.md)")
     ap.add_argument("--draft", metavar="PHOTO", help="распознать фото и дописать черновую строку в labels.csv")
     ap.add_argument("--statement", help="условие задачи для --draft")
-    ap.add_argument("--kind", default="equation", choices=("equation", "expression"))
+    ap.add_argument("--kind", default="equation", choices=("equation", "expression", *KINDS))
     ap.add_argument("--problem", type=int, default=1, help="номер задачи на фото для --draft")
     args = ap.parse_args()
     cfg = llm.config_from_env()
@@ -154,8 +162,8 @@ def main() -> None:
         return
 
     all_rows, _ = read_labels(args.labels)
-    rows = [r for r in all_rows if (r.get("status") or "").strip() != "draft"]
-    n_draft = len(all_rows) - len(rows)
+    ref = quality.reference_accuracy(all_rows)  # та же функция, что у страницы «Качество»: черновики пропущены
+    rows, n_draft = [x["label"] for x in ref["rows"]], ref["n_draft"]
 
     by_photo: dict = {}
     times: list = []
@@ -176,19 +184,12 @@ def main() -> None:
     n_lines = ok_lines = 0
     cer_err = cer_chars = 0
     conf_pairs: list = []
-    n_err = ok_err_line = ok_err_tag = 0
+    n_err, ok_err_line, ok_err_tag = ref["n"], ref["ok_line"], ref["ok_tag"]
     n_e2e = ok_e2e = ok_e2e_tag = 0
-    for i, r in enumerate(rows, 1):
-        truth = [l.strip() for l in r["lines"].split("|") if l.strip()]
-        want_line = int(r.get("error_line") or 0)
-        want_tag = (r.get("error_tag") or "").strip()
-        res = check_problem(r["kind"], r["statement"], truth, None)
-        got_line = res.first_error["line"] if res.first_error else 0
-        got_tag = res.first_error["tag"] if res.first_error else ""
-        n_err += 1
-        ok_err_line += got_line == want_line
-        ok_err_tag += got_line == want_line and (not want_tag or got_tag == want_tag)
-        mark = "✓" if got_line == want_line else "✗"
+    for i, x in enumerate(ref["rows"], 1):
+        r, truth = x["label"], x["truth"]
+        want_line, want_tag, got_line, got_tag = x["want_line"], x["want_tag"], x["got_line"], x["got_tag"]
+        mark = "✓" if x["ok_line"] else "✗"
         print(f"{i:>3} {mark} {r['statement']:<32} эталон: {want_line}/{want_tag or '-':<10} проверка: {got_line}/{got_tag or '-'}")
 
         if args.ocr and r.get("photo") and by_photo.get(r["photo"]) is not None:

@@ -135,6 +135,7 @@ def remember(name: str, value):
 user = login_view.gate(conn, L)          # без входа рисует форму и вызывает st.stop()
 PAGES = auth.allowed_pages(user, PAGES)
 is_admin = user["role"] == "admin"
+REVIEWER = str(user["id"]) if user.get("id") is not None else None  # отметки учителя — с id пользователя (Дзета B5)
 
 PAGE_NAMES = {
     "class": L("🏫 Карта класса", "🏫 Сынып картасы"),
@@ -188,12 +189,16 @@ with st.sidebar:
             st.caption(L("Сейчас: ", "Қазір: ") + cfg.label())
 
     st.divider()
-    st.markdown('<span class="badge b-syn">' + L("данные синтетические", "синтетикалық деректер") + "</span>",
-                unsafe_allow_html=True)
-    st.caption(L("8 вымышленных учеников × 6 работ. Строки решений сгенерированы, но все выводы "
-                 "в журнал записала настоящая проверка SymPy.",
-                 "8 ойдан шығарылған оқушы × 6 жұмыс. Шешім жолдары генерацияланған, бірақ "
-                 "журналдағы барлық қорытындыны нақты SymPy тексеруі жазды."))
+    # бейдж — только если пользователь видит синтетических учеников (как consent.is_synthetic): настоящий класс не подписываем
+    _syn = {r["student_id"] for r in db.q(conn, "SELECT DISTINCT student_id FROM submissions WHERE source='synthetic'")}
+    _vis = auth.visible_student_ids(conn, user)
+    if _syn and (_vis is None or _syn & _vis):
+        st.markdown('<span class="badge b-syn">' + L("данные синтетические", "синтетикалық деректер") + "</span>",
+                    unsafe_allow_html=True)
+        st.caption(L("8 вымышленных учеников × 6 работ. Строки решений сгенерированы, но все выводы "
+                     "в журнал записала настоящая проверка SymPy.",
+                     "8 ойдан шығарылған оқушы × 6 жұмыс. Шешім жолдары генерацияланған, бірақ "
+                     "журналдағы барлық қорытындыны нақты SymPy тексеруі жазды."))
     if is_admin and st.button(L("↺ Сбросить демо-данные", "↺ Демоны қайта бастау"), use_container_width=True):
         reset_demo()
         st.rerun()
@@ -217,9 +222,7 @@ def status_note(kind: str, status: str, note: str) -> str:
         return L("верно относительно ошибочной строки", "қате жолға қатысты дұрыс")
     if status == "unparsed":
         return L("не разобрано — поправьте текст", "танылмады — мәтінді түзетіңіз")
-    labels = {"answer": L("ответ", "жауап"), "check": L("проверка", "тексеру"), "domain": L("ОДЗ", "ММЖ"),
-              "rejected": L("отброшен", "алынып тасталды"), "disc": "D", "vieta": L("Виет", "Виет")}
-    out = labels.get(kind, "")
+    out = T.LINE_KINDS.get(kind, {}).get(lang, "")
     if note and note.startswith("✓"):
         out = (out + " ✓").strip()
     elif note and note.startswith("✗"):
@@ -263,7 +266,7 @@ def ref_label(r: dict) -> str:
 def show_ref_work(r: dict):
     """Показать строки той задачи, на которую ссылается вывод портрета."""
     if not r.get("sub_id") or not r.get("problem_idx"):
-        st.markdown(f"- {esc(ref_label(r))}: `{esc(r.get('evidence'))}`")
+        st.markdown(f"- {esc(ref_label(r))}: <code>{esc(r.get('evidence'))}</code>", unsafe_allow_html=True)
         return
     prob = db.q1(conn, """SELECT p.* FROM problems p JOIN submissions s ON s.assignment_id = p.assignment_id
                           WHERE s.id=? AND p.idx=?""", (r["sub_id"], r["problem_idx"]))
@@ -291,6 +294,15 @@ def no_students() -> bool:
     st.info(L("В ваших классах пока нет учеников. Классы назначает администратор.",
               "Сыныптарыңызда әзірге оқушы жоқ. Сыныптарды әкімші тағайындайды."))
     return True
+
+
+def llm_allowed(ru: str, kk: str) -> bool:
+    """Лимит обращений к модели на пользователя (auth.rate_limit, Дзета B4). При отказе — предупреждение, вызова нет."""
+    if auth.rate_limit(user, "llm"):
+        return True
+    n = auth.RATE_LIMITS["llm"][0]
+    st.warning(L(f"Лимит обращений к модели: {n} в час. ", f"Модельге жүгіну шегі: сағатына {n}. ") + L(ru, kk))
+    return False
 
 
 def go(page_key: str, student_id: int | None = None):
@@ -413,7 +425,8 @@ def page_portrait():
     st.markdown(f'<span class="muted">{esc(p["student"]["class_name"])} · '
                 + L(f"{p['n_works']} работ · {p['n_obs']} наблюдений в журнале",
                     f"{p['n_works']} жұмыс · журналда {p['n_obs']} бақылау")
-                + f"</span> {badge(L('синтетические данные', 'синтетикалық деректер'), 'b-syn')}{live}",
+                + "</span> " + (badge(L("синтетические данные", "синтетикалық деректер"), "b-syn")
+                                if consent.is_synthetic(conn, sid) else "") + live,
                 unsafe_allow_html=True)
 
     d = ss.get("diff")
@@ -445,7 +458,7 @@ def portrait_teacher(p: dict):
         badges = badge(L("слабое место", "әлсіз тұс"), "b-weak")
         if e["confirmed"]:
             badges += badge(L("подтверждено дважды: работы + учитель", "екі рет расталды: жұмыс + мұғалім"), "b-conf")
-        badges += review_view.precision_badge(conn, e["tag"], L)
+        badges += review_view.precision_badge(conn, e["tag"], L, auth.visible_student_ids(conn, user))
         det = f" ({esc(e['detail'])})" if e["detail"] else ""
         st.markdown(f'<div class="card"><h4>{esc(t)} · {esc(T.skill_name(e["skill"], lang).lower())} {badges}</h4>'
                     f'{esc(portrait.share_text(e["count"], e["total"], lang))}{det}. '
@@ -454,7 +467,8 @@ def portrait_teacher(p: dict):
         with st.expander(L(f"Доказательства ({len(e['refs'])}): работа, строка", f"Дәлелдер ({len(e['refs'])}): жұмыс, жол")):
             for r in e["refs"]:
                 show_ref_work(r)
-                review_view.controls(conn, r.get("obs_id"), L, key=f"rv_{p['student']['id']}_{r.get('obs_id')}")
+                review_view.controls(conn, r.get("obs_id"), L, key=f"rv_{p['student']['id']}_{r.get('obs_id')}",
+                                     reviewer=REVIEWER)
     low = [e for e in p["errors"] if not e["weak"]]
     if low:
         st.markdown("**" + L("Наблюдаем, но выводов пока нет", "Бақылап жүрміз, әзірге қорытынды жоқ") + "**")
@@ -473,6 +487,14 @@ def portrait_teacher(p: dict):
             share = m["count"] / m["total"] if m["total"] else 0
             st.markdown(f'{esc(T.name(m["tag"], lang))} — {esc(portrait.share_text(m["count"], m["total"], lang))}'
                         f'<div class="bar"><div style="width:{share * 100:.0f}%"></div></div>', unsafe_allow_html=True)
+        for sk, ms in p["methods_by_skill"].items():  # новые темы: метод интервалов, подстановка, замена…
+            if sk == "quadratic":
+                continue  # квадратные — выше, вместе со способами без наблюдений
+            st.markdown(f"**{esc(T.skill_name(sk, lang))}: " + L("какими способами", "қандай тәсілмен") + "**")
+            for m in ms:
+                share = m["count"] / m["total"] if m["total"] else 0
+                st.markdown(f'{esc(T.name(m["tag"], lang))} — {esc(portrait.share_text(m["count"], m["total"], lang))}'
+                            f'<div class="bar"><div style="width:{share * 100:.0f}%"></div></div>', unsafe_allow_html=True)
     with c2:
         st.markdown("**" + L("Привычки", "Әдеттер") + "**")
         for h in ("check_done", "skip_steps", "domain_noted", "late"):
@@ -507,7 +529,9 @@ def portrait_teacher(p: dict):
     pers = ss.get("personalized", {}).get((p["student"]["id"], lang))
     cfg = ss["llm_cfg"]
     if recs and cfg.ready and not pers:
-        if st.button(L("✨ Привязать советы к работам (ИИ)", "✨ Кеңестерді жұмыстарға байланыстыру (ЖИ)")):
+        if st.button(L("✨ Привязать советы к работам (ИИ)", "✨ Кеңестерді жұмыстарға байланыстыру (ЖИ)")) and llm_allowed(
+                "Попробуйте позже — пока показаны советы из словаря.",
+                "Кейінірек қайталаңыз — әзірге сөздіктегі кеңестер көрсетілді."):
             try:
                 with st.spinner(L("Формулирую…", "Тұжырымдап жатырмын…")):
                     adv = llm.personalize(cfg, recs[:3], p["student"]["alias"], lang)
@@ -557,7 +581,7 @@ def portrait_teacher(p: dict):
                 st.markdown(f"💬 *{esc(cmt['text'])}*")
 
     dynamics_view.render_section(conn, p, L, lang)
-    review_view.rating_form(conn, p, L)
+    review_view.rating_form(conn, p, L, reviewer=REVIEWER)
 
 
 def portrait_student(p: dict):
@@ -568,9 +592,11 @@ def portrait_student(p: dict):
     good = [f"{T.skill_name(s['skill'], lang)} — " + L(f"без ошибок в {s['clean']} работах из {s['total']}",
                                                        f"{s['clean']}/{s['total']} жұмыста қатесіз")
             for s in p["strengths"]]
-    used = [m for m in p["methods"] if m["count"]]
+    used = [m["tag"] for m in p["methods"] if m["count"]]
+    used += list(dict.fromkeys(m["tag"] for sk, ms in p["methods_by_skill"].items() if sk != "quadratic"
+                               for m in ms if m["tag"] not in used))
     if used:
-        good.append(L("Уверенно пользуешься: ", "Сенімді қолданасың: ") + ", ".join(T.name(m["tag"], lang).lower() for m in used))
+        good.append(L("Уверенно пользуешься: ", "Сенімді қолданасың: ") + ", ".join(T.name(m, lang).lower() for m in used))
     if p["habits"]["check_done"]["count"] >= max(1, p["n_works"] // 2):
         good.append(L("Часто проверяешь ответ — это отличная привычка", "Жауапты жиі тексересің — бұл тамаша әдет"))
     st.markdown("\n".join(f"- ✅ {g}" for g in good) or "—")
@@ -626,21 +652,23 @@ def page_check():
                                           "помечаются ⚠️ и показывают оба варианта.",
                                           "Фото екі түрлі сұраумен екі рет оқылады; оқулар сәйкес келмеген жолдар "
                                           "⚠️ белгіленіп, екі нұсқасы да көрсетіледі.")) else 1
-        if c_btn.button(L("Распознать строки", "Жолдарды тану"), disabled=not (cfg.ready and up is not None), type="primary"):
+        if c_btn.button(L("Распознать строки", "Жолдарды тану"), disabled=not (cfg.ready and up is not None),
+                        type="primary") and llm_allowed("Попробуйте позже или введите строки текстом.",
+                                                        "Кейінірек қайталаңыз немесе жолдарды мәтінмен енгізіңіз."):
             try:
                 t0 = datetime.now()
                 with st.spinner(L("Распознаю почерк…", "Қолжазбаны танып жатырмын…")):
                     det = llm.recognize_detailed(cfg, up.getvalue(), [(p["idx"], p["statement"]) for p in probs], passes=passes)
 
-                def _prep(lines):
+                def _prep(lines, kind=None):  # kind — вид задачи: строки неравенств и систем разбирает модуль вида
                     out = []
                     for l in lines:
                         l = {**l, "text": ocr.clean_text(l["text"])}
                         if l.get("alternatives"):
                             l["alternatives"] = [ocr.clean_text(a) for a in l["alternatives"]]
                         out.append(l)
-                    return ocr.score_lines(out)
-                ss["ocr_view"] = {p["id"]: _prep(det.get(p["idx"], [])) for p in probs}
+                    return ocr.score_lines(out, kind)
+                ss["ocr_view"] = {p["id"]: _prep(det.get(p["idx"], []), p["kind"]) for p in probs}
                 ss["ocr_raw"] = {pid: list(ls) for pid, ls in ss["ocr_view"].items()}
                 ss["ocr_unassigned"] = _prep(det.get(llm.UNASSIGNED, []))
                 ss["ocr_aid"], ss["ocr_run"] = aid, ss.get("ocr_run", 0) + 1
@@ -727,7 +755,8 @@ def page_check():
                             for (_, row), l in zip(loose_df.iterrows(), loose):
                                 if row["to"] == f"№{p['idx']}" and _cell(row["text"]):
                                     texts.append(_cell(row["text"]))
-                                    new_raw[p["id"]].append(l)  # строка из распознавания — для учёта правок
+                                    # строка из распознавания — для учёта правок; уверенность — по виду задачи, куда её отнесли
+                                    new_raw[p["id"]].append(ocr.score_line(l, p["kind"]))
                         ss[f"lines_{aid}_{p['id']}"] = "\n".join(texts)
                     ss["ocr_raw"] = new_raw  # + строки без задачи, которые учитель отнёс к задаче
                     ss["ocr_accepted"] = True
@@ -741,11 +770,17 @@ def page_check():
         st.caption(L("Фото не сохраняется: после распознавания в базе остаются только строки текста.",
                      "Фото сақталмайды: танылғаннан кейін базада тек мәтін жолдары қалады."))
     with tab_text:
-        if aid == live_aid and st.button(L("Вставить демо-работу (Айгерим, ДЗ №7)", "Демо-жұмысты қою (Айгерим, ҮТ №7)")):
+        number = next(a["number"] for a in asg if a["id"] == aid)
+        demo = seed.LIVE_DEMO_TEXT if aid == live_aid else seed.EXTRA_DEMO_TEXT.get(number)
+        # демо-ученица — по псевдониму в синтетическом классе: id меняются после удаления и импорта
+        demo_sid = next((s["id"] for s in studs if s["alias"] == seed.STUDENTS[0] and s["class_name"] == seed.CLASS_NAME), None)
+        who = f"{seed.STUDENTS[0]}, " if demo_sid is not None else ""
+        if demo and st.button(L(f"Вставить демо-работу ({who}ДЗ №{number})", f"Демо-жұмысты қою ({who}ҮТ №{number})")):
             for p in probs:
-                ss[f"lines_{aid}_{p['id']}"] = seed.LIVE_DEMO_TEXT.get(p["idx"], "")
-            ss["set_chk_student"] = 1 if 1 in alias else sid
-            ss["comment_prefill"] = seed.LIVE_DEMO_COMMENT
+                ss[f"lines_{aid}_{p['id']}"] = demo.get(p["idx"], "")
+            ss["set_chk_student"] = demo_sid if demo_sid is not None else sid
+            if aid == live_aid:
+                ss["comment_prefill"] = seed.LIVE_DEMO_COMMENT
             st.rerun()
         for p in probs:
             st.text_area(f"№{p['idx']}. {p['statement']}  ·  {T.skill_name(p['skill'], lang)}",
@@ -816,7 +851,7 @@ def page_check():
                         + "<br>".join(esc(x) for x in d["lines"]) + "</div>", unsafe_allow_html=True)
         else:
             st.success(L("Работа записана в журнал.", "Жұмыс журналға жазылды."))
-        review_view.submission_controls(conn, ss.get("last_sub_id"), L)
+        review_view.submission_controls(conn, ss.get("last_sub_id"), L, reviewer=REVIEWER)
         if st.button(L("Открыть портрет →", "Портретті ашу →"), type="primary"):
             go("portrait", sid)
         return
@@ -846,13 +881,13 @@ def page_check():
         text = (ss.get("comment_text") or "").strip()
         if text:
             tagged, tagger = None, "keywords"
-            if cfg.ready:
+            if cfg.ready and auth.rate_limit(user, "llm"):  # лимит — как ошибка модели: разметка по словарю
                 try:
                     tagged, tagger = llm.tag_comment(cfg, text), "llm"
                 except llm.LLMError:
                     tagged = None
             pipeline.record_comment(conn, sub_id, text, tagged or tag_comment_keywords(text), tagger)
-        review_view.after_record(conn, ss, sub_id, sid, aid, chk, L)  # время проверки и «это не ошибка»
+        review_view.after_record(conn, ss, sub_id, sid, aid, chk, L, reviewer=REVIEWER)  # время проверки и «это не ошибка»
         ss["last_sub_id"] = sub_id
         after = portrait.snapshot(portrait.build(conn, sid, lang))
         ss["diff"] = {"sid": sid, "lines": portrait.diff(before, after, lang)}
@@ -873,9 +908,10 @@ def page_log():
     c = st.columns(3)
     who = c[0].selectbox(L("Ученик", "Оқушы"), [0] + [s["id"] for s in studs],
                          format_func=lambda i: L("все", "барлығы") if i == 0 else next(s["alias"] for s in studs if s["id"] == i))
-    src = c[1].selectbox(L("Источник", "Көзі"), ["", "auto", "teacher"],
+    src = c[1].selectbox(L("Источник", "Көзі"), ["", "auto", "teacher", "practice"],
                          format_func=lambda x: {"": L("все", "барлығы"), "auto": L("автопроверка", "автотексеру"),
-                                                "teacher": L("учитель", "мұғалім")}[x])
+                                                "teacher": L("учитель", "мұғалім"),
+                                                "practice": L("тренажёр", "жаттықтырғыш")}[x])
     kind = c[2].selectbox(L("Вид", "Түрі"), ["", "error", "method", "habit", "teacher"],
                           format_func=lambda x: {"": L("все", "барлығы"), "error": L("ошибка", "қате"),
                                                  "method": L("метод", "тәсіл"), "habit": L("привычка", "әдет"),
@@ -907,7 +943,7 @@ def page_log():
                        on_select="rerun", selection_mode="single-row", key=f"log_table_{who}_{src}_{kind}")
     picked = sel.selection.rows if sel else []
     if picked and picked[0] < len(rows):
-        review_view.log_controls(conn, rows[picked[0]], L)
+        review_view.log_controls(conn, rows[picked[0]], L, reviewer=REVIEWER)
     else:
         st.caption(L("Выберите строку слева в таблице, чтобы поставить отметку учителя.",
                      "Мұғалім белгісін қою үшін кестеде жолды сол жағынан таңдаңыз."))
@@ -943,6 +979,14 @@ digraph G { rankdir=LR; node [shape=box, style="rounded,filled", fillcolor="#eef
     st.markdown(L(
         "- **Уравнения**: сравниваются множества решений соседних строк (`solveset` на ℝ, с учётом ОДЗ условия) — так ловятся потерянные и лишние корни.\n"
         "- **Выражения**: разность соседних строк упрощается до нуля или совпадает в 20 случайных точках.\n"
+        "- **Неравенства** (`core/kinds/inequality.py`): сравниваются множества решений соседних строк; метод интервалов — "
+        "корни, строка знаков «+ − +», ответ промежутком. Ошибки: *знак неравенства* при делении на отрицательное, "
+        "*деление на выражение с x*, *не тот промежуток*, *граница* (строгое / нестрогое, точка вне ОДЗ).\n"
+        "- **Системы уравнений** (`core/kinds/system.py`): каждая строка должна следовать из системы; способы подстановки "
+        "и сложения. Ошибки: *подстановка без скобок*, *перепутаны x и y* в ответе.\n"
+        "- **Биквадратные уравнения** (`core/kinds/biquadratic.py`): замена t = x², уравнение в t, обратная замена. "
+        "Ошибка: *x² = t при t < 0*; потерянные корни ± — *потеря корня*.\n"
+        "- **Алгебраические дроби** проверяются как выражения; отдельное правило — *сокращение слагаемых вместо множителей*.\n"
         "- Первая строка, где проверка не прошла, — место ошибки. Тип определяют правила: *знак* (смена знака одного слагаемого делает строки равносильными), "
         "*ФСУ* (типичное неверное раскрытие (a±b)² или (a−b)(a+b)), *вычислительная* (строки расходятся ровно в одном числе), *потеря / лишний корень* "
         "(множество решений уменьшилось / выросло; для потери ищется делитель с x).\n"
@@ -950,6 +994,14 @@ digraph G { rankdir=LR; node [shape=box, style="rounded,filled", fillcolor="#eef
         "- Строка из распознавания идёт в SymPy только после белого списка символов — произвольный код выполнить нельзя.",
         "- **Теңдеулер**: көршілес жолдардың шешімдер жиыны салыстырылады (ℝ-да `solveset`, шарттың ММЖ ескеріледі) — жоғалған және артық түбірлер осылай табылады.\n"
         "- **Өрнектер**: көршілес жолдардың айырмасы нөлге дейін ықшамдалады немесе 20 кездейсоқ нүктеде сәйкес келеді.\n"
+        "- **Теңсіздіктер**: көршілес жолдардың шешімдер жиыны салыстырылады; интервалдар әдісі — түбірлер, «+ − +» "
+        "таңбалар жолы, жауап аралықпен. Қателер: теріс санға бөлгенде *теңсіздік таңбасы*, *x-і бар өрнекке бөлу*, "
+        "*басқа аралық таңдалған*, *шекара* (қатаң / қатаң емес, ММЖ-дан тыс нүкте).\n"
+        "- **Теңдеулер жүйелері**: әр жол жүйеден шығуы керек; алмастыру және қосу тәсілдері. Қателер: *жақшасыз алмастыру*, "
+        "жауапта *x пен y ауысып кеткен*.\n"
+        "- **Биквадрат теңдеулер**: t = x² алмастыруы, t-ға қатысты теңдеу, кері алмастыру. Қате: *t < 0 болғанда x² = t*; "
+        "жоғалған ± түбірлер — *түбірді жоғалту*.\n"
+        "- **Алгебралық бөлшектер** өрнектер сияқты тексеріледі; бөлек ереже — *көбейткіштің орнына қосылғышты қысқарту*.\n"
         "- Тексеруден өтпеген алғашқы жол — қатенің орны. Түрін ережелер анықтайды: *таңба*, *ҚКФ*, *есептеу*, *түбірді жоғалту / бөгде түбір*.\n"
         "- Танылған жол SymPy-ға тек рұқсат етілген таңбалар тізімінен кейін ғана түседі."))
     st.subheader(L("Как собирается портрет", "Портрет қалай құралады"))
@@ -968,30 +1020,64 @@ digraph G { rankdir=LR; node [shape=box, style="rounded,filled", fillcolor="#eef
     st.subheader(L("Своё и стороннее", "Өзіміздікі және бөгде"))
     st.markdown(L(
         "| Компонент | Чьё |\n|---|---|\n"
-        "| Нормализация рукописной записи, правила классификации ошибок, методов и привычек | **своё** (`core/checker.py`) |\n"
+        "| Нормализация рукописной записи, правила классификации ошибок, методов и привычек | **своё** (`core/checker.py`, `core/kinds/`) |\n"
+        "| Уверенность распознанных строк, журнал распознаваний | **своё** (`core/ocr.py`, `core/ocr_store.py`) |\n"
         "| Журнал наблюдений, взвешенная доля, пороги, «подтверждено дважды», советы | **своё** (`core/portrait.py`, `core/tags.py`) |\n"
+        "| Динамика: тренд, интервал Уилсона, BKT, эффект советов | **своё** (`core/knowledge.py`, `core/interventions.py`) |\n"
+        "| Тренажёр: задачи под слабое место, лестница подсказок | **своё** (`core/practice.py`, `core/hints.py`) |\n"
+        "| Отметки учителя, метрики качества | **своё** (`core/review.py`, `core/quality.py`) |\n"
+        "| Аккаунты и роли, согласие, журнал действий, удаление данных | **своё** (`core/auth.py`, `core/consent.py`, `core/audit.py`, `core/privacy.py`) |\n"
         "| Словарь тегов и советов на русском и казахском | **своё** |\n"
         "| Интерфейс | **своё** на Streamlit |\n"
         "| Символьная математика (равносильность, solveset) | SymPy (open source) |\n"
+        "| Подбор параметров BKT, графики динамики | numpy, Altair (open source, идут вместе с pandas и Streamlit) |\n"
+        "| Подготовка фото | Pillow (open source) |\n"
         "| Распознавание почерка, разметка комментариев, формулировки | внешняя языковая модель по API (Claude / OpenAI-совместимая) |\n"
         "| База, таблицы | SQLite, pandas |",
         "| Компонент | Кімдікі |\n|---|---|\n"
         "| Қолжазбаны қалыпқа келтіру, қателерді, тәсілдер мен әдеттерді жіктеу ережелері | **өзіміздікі** |\n"
+        "| Танылған жолдардың сенімділігі, тану журналы | **өзіміздікі** |\n"
         "| Бақылау журналы, салмақталған үлес, шектер, кеңестер | **өзіміздікі** |\n"
+        "| Динамика: үрдіс, Уилсон аралығы, BKT, кеңестердің әсері | **өзіміздікі** |\n"
+        "| Жаттықтырғыш: әлсіз тұсқа арналған есептер, көмек сатылары | **өзіміздікі** |\n"
+        "| Мұғалім белгілері, сапа метрикалары | **өзіміздікі** |\n"
+        "| Аккаунттар мен рөлдер, келісім, әрекеттер журналы, деректерді жою | **өзіміздікі** |\n"
         "| Орыс және қазақ тілдеріндегі тегтер мен кеңестер сөздігі | **өзіміздікі** |\n"
         "| Интерфейс | Streamlit-те **өзіміздікі** |\n"
         "| Символдық математика | SymPy (open source) |\n"
+        "| BKT параметрлерін таңдау, динамика графиктері | numpy, Altair (open source) |\n"
+        "| Фотоны дайындау | Pillow (open source) |\n"
         "| Қолжазбаны тану, пікірлерді белгілеу | API арқылы сыртқы тілдік модель |\n"
         "| База | SQLite, pandas |"))
     st.subheader(L("Персональные данные", "Дербес деректер"))
-    st.markdown(L("Псевдонимы вместо имён; фото не сохраняется — после распознавания остаются только строки текста; "
-                  "реальные работы — только с согласия. В демо все ученики вымышленные.",
-                  "Аттардың орнына бүркеншік аттар; фото сақталмайды — танылғаннан кейін тек мәтін жолдары қалады; "
-                  "нақты жұмыстар — тек келісіммен. Демода барлық оқушы ойдан шығарылған."))
+    st.markdown(L(
+        "| Что | Как |\n|---|---|\n"
+        "| Имена | псевдонимы вместо имён |\n"
+        "| Фото | не сохраняется: после распознавания остаются только строки текста |\n"
+        "| Согласие | живая работа записывается в журнал, а тренажёр сохраняет решения, только если отмечено согласие "
+        "(бумажная форма родителя, в базе — только её номер и дата). Синтетическим ученикам демо оно ставится само |\n"
+        "| Доступ | учитель видит только свои классы, ученик — только свой портрет и тренажёр; пароли — только хэш PBKDF2 с солью |\n"
+        "| Журнал действий | вход, просмотр портрета, запись работы, выгрузки, удаление — только коды действий и id, "
+        "без имён и текстов работ |\n"
+        "| Удаление | по запросу администратор удаляет все данные ученика во всех таблицах: «🛡️ Управление» → «Удаление данных» |\n"
+        "| Демо | все ученики вымышленные |",
+        "| Не | Қалай |\n|---|---|\n"
+        "| Аттар | аттардың орнына бүркеншік аттар |\n"
+        "| Фото | сақталмайды: танылғаннан кейін тек мәтін жолдары қалады |\n"
+        "| Келісім | тірі жұмыс журналға жазылады, ал жаттықтырғыш шешімдерді сақтайды — тек келісім белгіленсе "
+        "(ата-ананың қағаз нысаны, базада тек оның нөмірі мен күні). Демодағы синтетикалық оқушыларға ол өзі қойылады |\n"
+        "| Қолжетімділік | мұғалім тек өз сыныптарын көреді, оқушы — тек өз портреті мен жаттықтырғышын; құпиясөздер — тек "
+        "тұзы бар PBKDF2 хэші |\n"
+        "| Әрекеттер журналы | кіру, портретті қарау, жұмысты жазу, түсіру, жою — тек әрекет коды мен id, "
+        "аттарсыз және жұмыс мәтіндерінсіз |\n"
+        "| Жою | сұрау бойынша әкімші оқушының барлық кестедегі деректерін жояды: «🛡️ Басқару» → «Деректерді жою» |\n"
+        "| Демо | барлық оқушы ойдан шығарылған |"))
 
 
 {"class": page_class, "portrait": page_portrait, "check": page_check, "log": page_log,
- "quality": lambda: review_view.render_quality(conn, L, lang, esc),
+ "quality": lambda: review_view.render_quality(conn, L, lang, esc, student_ids=auth.visible_student_ids(conn, user),
+                                               user=user),
  "manage": lambda: manage_view.render(conn, user, L, lang),
- "practice": lambda: practice_view.render(conn, L, lang, esc, badge, render_lines, students), "about": page_about}[page]()
+ "practice": lambda: practice_view.render(conn, L, lang, esc, badge, render_lines, students, role=user["role"]),
+ "about": page_about}[page]()
 ss["_last_lang"] = lang

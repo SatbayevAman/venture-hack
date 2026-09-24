@@ -120,8 +120,32 @@ def record_comment(conn, submission_id: int, text: str, tagged: list, tagger: st
 
 
 def delete_submission(conn, sub_id: int) -> None:
-    """Удалить работу вместе со всеми её следами в журнале (для повторной живой проверки)."""
-    for table in ("observations", "steps", "attempts", "teacher_comments"):
-        conn.execute(f"DELETE FROM {table} WHERE submission_id=?", (sub_id,))
-    conn.execute("DELETE FROM submissions WHERE id=?", (sub_id,))
-    conn.commit()
+    """Удалить работу вместе со всеми её следами (для повторной живой проверки).
+
+    SQLite выдаёт новой работе и её наблюдениям те же id, что были у удалённых, поэтому
+    всё, что ссылается на работу или её наблюдения, удаляется вместе с ней — иначе прежние
+    отметки учителя, распознавания и замеры прирастут к новой работе. Таблицы находятся по
+    столбцам submission_id и observation_id (db.tables), как в privacy.delete_student.
+    Исходы тренажёра (source='practice') остаются в журнале — они отвязываются от работы."""
+    tables = db.tables(conn)
+    try:
+        # 1. исходы тренажёра по этой работе — в журнале, но без ссылки на работу
+        conn.execute("UPDATE observations SET submission_id=NULL WHERE submission_id=? AND source='practice'", (sub_id,))
+        if "source_submission_id" in tables.get("practice_items", []):
+            conn.execute("UPDATE practice_items SET source_submission_id=NULL WHERE source_submission_id=?", (sub_id,))
+        # 2. ссылки на удаляемые наблюдения работы (отметки учителя)
+        obs = [r["id"] for r in db.q(conn, "SELECT id FROM observations WHERE submission_id=?", (sub_id,))]
+        if obs:
+            marks = ",".join("?" * len(obs))
+            for t, cols in tables.items():
+                if "observation_id" in cols:
+                    conn.execute(f"DELETE FROM {db.qi(t)} WHERE observation_id IN ({marks})", obs)
+        # 3. строки работы во всех таблицах; 4. сама работа — последней (внешние ключи)
+        for t, cols in tables.items():
+            if "submission_id" in cols:
+                conn.execute(f"DELETE FROM {db.qi(t)} WHERE submission_id=?", (sub_id,))
+        conn.execute("DELETE FROM submissions WHERE id=?", (sub_id,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise

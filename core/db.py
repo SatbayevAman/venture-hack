@@ -29,8 +29,8 @@ CREATE TABLE IF NOT EXISTS problems (
     id INTEGER PRIMARY KEY,
     assignment_id INTEGER NOT NULL REFERENCES assignments(id),
     idx INTEGER NOT NULL,
-    skill TEXT NOT NULL,           -- linear | quadratic | simplify
-    kind TEXT NOT NULL,            -- equation | expression
+    skill TEXT NOT NULL,           -- tags.SKILLS: linear | quadratic | simplify | inequality | system | biquadratic | fractions
+    kind TEXT NOT NULL,            -- equation | expression | виды core/kinds: inequality | system | biquadratic
     statement TEXT NOT NULL,
     reference TEXT NOT NULL,       -- эталонное решение, JSON-список строк
     answer TEXT NOT NULL
@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS steps (
     line_no INTEGER NOT NULL,
     raw_text TEXT NOT NULL,
     sympy_text TEXT,
-    kind TEXT,
+    kind TEXT,                     -- вид строки: checker.LineResult.kind (подписи — tags.LINE_KINDS)
     status TEXT,                   -- ok | error | after | info | unparsed
     note TEXT
 );
@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS observations (
     skill TEXT,
     evidence TEXT,                 -- цитата: строки работы или слова учителя
     detail TEXT,                   -- JSON: подробности правила
-    source TEXT NOT NULL,          -- auto | teacher
+    source TEXT NOT NULL,          -- auto | teacher | practice (исходы тренажёра; в числа портрета не входят)
     confidence REAL NOT NULL,
     created_at TEXT NOT NULL
 );
@@ -131,6 +131,19 @@ def add_observation(conn, student_id, submission_id, problem_id, line_no, kind, 
         (student_id, submission_id, problem_id, line_no, kind, tag, skill, evidence,
          json.dumps(detail or {}, ensure_ascii=False), source, confidence, created_at or now()),
     )
+
+
+def qi(name: str) -> str:
+    """Имя таблицы или столбца из sqlite_master — в кавычках SQL-идентификатора."""
+    return '"' + name.replace('"', '""') + '"'
+
+
+def tables(conn) -> dict[str, list[str]]:
+    """{таблица: [столбцы]} по sqlite_master и PRAGMA table_info — включая таблицы, которые модули
+    направлений создают сами. Удаление работы и ученика ищет по ним столбцы-ссылки, поэтому новые
+    таблицы покрываются без правок удаления."""
+    names = [r["name"] for r in q(conn, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+    return {n: [c["name"] for c in q(conn, f"PRAGMA table_info({qi(n)})")] for n in names}
 
 
 def q(conn, sql: str, params=()) -> list[sqlite3.Row]:
