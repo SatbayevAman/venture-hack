@@ -287,7 +287,7 @@ def page_class():
     c[2].metric(L("Наблюдений в журнале", "Журналдағы бақылау"), n_obs)
     c[3].metric(L("Комментариев учителя", "Мұғалім пікірі"), n_com)
 
-    skills = list(T.SKILLS)
+    skills = [s for s in T.SKILLS if any(r["cells"][s]["total"] for r in rows)] or list(T.SKILLS)
     disp, colors = [], []
     for r in rows:
         d = {L("Ученик", "Оқушы"): r["alias"]}
@@ -534,7 +534,7 @@ def page_check():
     c = st.columns(2)
     sid = remember("chk_student", c[0].selectbox(L("Ученик", "Оқушы"), list(alias), format_func=lambda i: alias[i],
                                                  key=sticky("chk_student", studs[0]["id"])))
-    aid = remember("chk_asg", c[1].selectbox(L("Задание", "Тапсырма"), [a["id"] for a in asg], key=sticky("chk_asg", asg[0]["id"]),
+    aid = remember("chk_asg", c[1].selectbox(L("Задание", "Тапсырма"), [a["id"] for a in asg], key=sticky("chk_asg", seed.live_assignment_id(conn)),
                          format_func=lambda i: next(f"{L('ДЗ', 'ҮТ')} №{a['number']} ({L('срок', 'мерзімі')} {a['due_at'][:10]})"
                                                     for a in asg if a["id"] == i)))
     probs = pipeline.problems_of(conn, aid)
