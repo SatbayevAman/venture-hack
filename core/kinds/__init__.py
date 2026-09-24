@@ -14,3 +14,7 @@ KINDS: dict[str, Callable] = {}
 from . import inequality  # noqa: E402 — модули видов сами импортируют checker
 
 KINDS["inequality"] = inequality.check
+
+from . import system  # noqa: E402
+
+KINDS["system"] = system.check

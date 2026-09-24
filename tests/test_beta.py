@@ -209,14 +209,17 @@ def test_extra_assignment_references_are_correct():
             assert r.first_error is None and r.correct is True, st
 
 
+VARIANT_TAGS = {"flip": "ineq_flip", "sign": "sign", "boundary": "boundary", "choice": "interval_choice",
+                "domain": "boundary", "mul": "ineq_div_var", "subst": "subst", "swap": "swap_xy",
+                "lost": "lost_root", "fsu": "fsu", "neg_t": "neg_t", "pm": "lost_root", "cancel": "cancel_terms"}
+
+
 def test_extra_variants_give_intended_tags():
-    expected = {"flip": "ineq_flip", "sign": "sign", "boundary": "boundary", "choice": "interval_choice",
-                "domain": "boundary", "mul": "ineq_div_var"}
-    ex = seed.EXTRA_ASSIGNMENTS[0]
-    for idx, variants in seed.EXTRA_VARIANTS[ex["number"]].items():
-        _, kind, st, ref, _ = ex["problems"][idx - 1]
-        for v, lines in variants.items():
-            assert first(kind, st, lines, len(ref))[1] == expected[v], (st, v)
+    for ex in seed.EXTRA_ASSIGNMENTS:
+        for idx, variants in seed.EXTRA_VARIANTS.get(ex["number"], {}).items():
+            _, kind, st, ref, _ = ex["problems"][idx - 1]
+            for v, lines in variants.items():
+                assert first(kind, st, lines, len(ref))[1] == VARIANT_TAGS[v], (st, v)
 
 
 def test_extra_assignment_keeps_demo(tmp_path):
@@ -238,3 +241,78 @@ def test_extra_assignment_keeps_demo(tmp_path):
     assert any(e["tag"] == "ineq_flip" and e["skill"] == "inequality" for e in p["errors"])
     row = next(r for r in portrait.class_map(conn, "ru") if r["alias"] == "Данияр")
     assert (row["cells"]["inequality"]["bad"], row["cells"]["inequality"]["total"]) == (1, 1)
+
+
+# ---------------------------------------------------------------- B1. системы уравнений
+
+S1 = "x + y = 5; x − y = 1"
+S2 = "2x + y = 7; x − y = 2"
+SQ = "x² + y² = 25; x + y = 7"
+SQ_HEAD = ["y = 7 − x", "x² + (7 − x)² = 25", "x² + 49 − 14x + x² = 25", "2x² − 14x + 24 = 0", "x² − 7x + 12 = 0"]
+
+
+@pytest.mark.parametrize("statement,lines,methods", [
+    (S1, ["y = 5 − x", "x − (5 − x) = 1", "2x − 5 = 1", "2x = 6", "x = 3", "y = 5 − 3 = 2", "Ответ: (3; 2)"], ["substitution"]),
+    (S1, ["2x = 6", "x = 3", "y = 5 − 3", "y = 2", "Ответ: (3; 2)"], ["addition"]),
+    ("2x + 3y = 12; x − y = 1", ["x = 1 + y", "2 + 2y + 3y = 12", "5y = 10", "y = 2", "x = 3", "Ответ: (3; 2)"], ["substitution"]),
+    # система двумя строками с фигурной скобкой и в одной строке через «;»
+    (S1, ["⎧ y = 5 − x", "⎩ x − (5 − x) = 1", "x = 3", "y = 2", "Ответ: (3; 2)"], ["substitution"]),
+    (S1, ["y = 5 − x; x − (5 − x) = 1", "x = 3", "y = 2", "Ответ: x = 3, y = 2"], ["substitution"]),
+    (S1, ["Ответ: x = 3 и y = 2"], []),
+    # квадратное + линейное: два решения
+    (SQ, SQ_HEAD + ["x₁ = 3, x₂ = 4", "y₁ = 4, y₂ = 3", "Ответ: (3; 4), (4; 3)"], ["substitution"]),
+    # нет решений / бесконечно много
+    ("x + y = 2; x + y = 5", ["Ответ: нет решений"], []),
+    ("x + y = 2; 2x + 2y = 4", ["Ответ: бесконечно много решений"], []),
+])
+def test_system_correct(statement, lines, methods):
+    r, t, _ = first("system", statement, lines)
+    assert t is None and r.correct is True and r.methods == methods
+
+
+@pytest.mark.parametrize("statement,lines,tag,line", [
+    # подстановка без скобок: минус перед подставленным выражением / коэффициент на одно слагаемое
+    (S2, ["y = 7 − 2x", "x − 7 − 2x = 2"], "subst", 2),
+    ("2x + 3y = 12; x − y = 1", ["y = x − 1", "2x + 3x − 1 = 12"], "subst", 2),
+    # перепутаны x и y
+    (S2, ["y = 7 − 2x", "x − (7 − 2x) = 2", "3x = 9", "x = 3", "y = 1", "Ответ: (1; 3)"], "swap_xy", 6),
+    # знак при переносе — после верной подстановки это уже не subst
+    (S1, ["y = 5 − x", "x − (5 − x) = 1", "x − 5 + x = 1", "2x = 1 − 5"], "sign", 4),
+    # вычислительные
+    (S1, ["2x = 8", "x = 4", "y = 1", "Ответ: (4; 1)"], "calc", 1),
+    (S1, ["2x = 6", "x = 3", "y = 5 − 3 = 3"], "calc", 3),
+    # потерянное решение и ФСУ в квадратной системе
+    (SQ, SQ_HEAD[:4] + ["x = 3", "y = 4", "Ответ: (3; 4)"], "lost_root", 7),
+    (SQ, ["y = 7 − x", "x² + (7 − x)² = 25", "x² + 49 + x² = 25"], "fsu", 3),
+    # лишнее решение у несовместной системы
+    ("x + y = 2; x + y = 5", ["Ответ: (1; 1)"], "extra_root", 1),
+    # ошибочное уравнение внутри строки-системы
+    (S1, ["⎧ y = 5 − x", "⎩ x − 5 − x = 1"], "subst", 2),
+])
+def test_system_errors(statement, lines, tag, line):
+    _, t, ln = first("system", statement, lines)
+    assert (t, ln) == (tag, line)
+
+
+def test_system_lines_after_error_are_relative():
+    r = check_problem("system", S2, ["y = 7 − 2x", "x − 7 − 2x = 2", "−x = 9", "x = −9", "y = 25", "Ответ: (−9; 25)"], 6)
+    assert [l.status for l in r.lines] == ["ok", "error", "after", "after", "after", "after"]
+
+
+def test_system_subst_not_on_correct_substitution():
+    r, t, _ = first("system", S2, ["y = 7 − 2x", "x − (7 − 2x) = 2", "x − 7 + 2x = 2", "3x = 9"])
+    assert t is None and all(l.status == "ok" for l in r.lines)
+
+
+def test_system_questions():
+    for lines, tag in ((["y = 7 − 2x", "x − 7 − 2x = 2"], "subst"),
+                       (["y = 7 − 2x", "x − (7 − 2x) = 2", "3x = 9", "x = 3", "y = 1", "Ответ: (1; 3)"], "swap_xy")):
+        r = check_problem("system", S2, lines, 6)
+        assert r.first_error["tag"] == tag
+        for lang in ("ru", "kk"):
+            q = question_for(r.first_error, lang)
+            assert q and "{" not in q and "(3; 1)" not in q and "x = 3" not in q
+    assert T.SKILLS["system"]["kk"] and T.SKILLS_SHORT["system"]["ru"] == "Системы"
+    for tag in ("subst", "swap_xy"):
+        assert all(T.TAGS[tag][f] for f in ("ru", "kk", "teacher_ru", "teacher_kk", "student_ru", "student_kk"))
+    assert T.TAGS["substitution"]["kind"] == T.TAGS["addition"]["kind"] == "method"
