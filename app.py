@@ -16,6 +16,7 @@ import streamlit as st
 from core import db, llm, pipeline, portrait, seed
 from core import tags as T
 from core.tags import question_for, tag_comment_keywords
+from ui import practice as practice_view
 
 ROOT = Path(__file__).parent
 DB_PATH = os.environ.get("PORTRET_DB", str(ROOT / "data" / "portret.db"))
@@ -95,7 +96,7 @@ def reset_demo():
 
 if "lang" not in ss:
     ss["lang"] = "ru"
-PAGES = ["class", "portrait", "check", "log", "about"]
+PAGES = ["class", "portrait", "check", "log", "practice", "about"]
 
 lang = ss["lang"]  # значение радиокнопки уже в session_state до её отрисовки
 
@@ -132,6 +133,7 @@ PAGE_NAMES = {
     "portrait": L("👤 Портрет ученика", "👤 Оқушы портреті"),
     "check": L("📷 Проверка работы", "📷 Жұмысты тексеру"),
     "log": L("📒 Журнал наблюдений", "📒 Бақылау журналы"),
+    "practice": L("🧩 Тренажёр", "🧩 Жаттықтырғыш"),
     "about": L("⚙️ Как это работает", "⚙️ Бұл қалай жұмыс істейді"),
 }
 
@@ -429,6 +431,7 @@ def portrait_teacher(p: dict):
             for s in p["strengths"]))
 
     # 3. Что пишет учитель
+    practice_view.render_portrait_block(conn, p["student"]["id"], L, lang)
     st.header(L("3. Что пишет учитель", "3. Мұғалім не жазады"))
     if not p["teacher"]:
         st.caption(L("Комментариев пока нет.", "Әзірге пікір жоқ."))
@@ -520,6 +523,8 @@ def portrait_student(p: dict):
                    f'<code>{esc(ex["evidence"])}</code></div>') if ex else ""
         st.markdown(f'<div class="card"><h4>{i + 1}. {esc(r["title"])}</h4>{esc(r["student"])}{example}</div>',
                     unsafe_allow_html=True)
+    if st.button(L("🧩 Потренироваться", "🧩 Жаттығу"), type="primary"):
+        go("practice", p["student"]["id"])
     st.caption(L("Это не оценка, а подсказка, над чем поработать. Каждый пункт опирается на твои работы.",
                  "Бұл баға емес, неге көңіл бөлу керегі туралы кеңес. Әр тармақ сенің жұмыстарыңа негізделген."))
 
@@ -782,5 +787,6 @@ digraph G { rankdir=LR; node [shape=box, style="rounded,filled", fillcolor="#eef
                   "нақты жұмыстар — тек келісіммен. Демода барлық оқушы ойдан шығарылған."))
 
 
-{"class": page_class, "portrait": page_portrait, "check": page_check, "log": page_log, "about": page_about}[page]()
+{"class": page_class, "portrait": page_portrait, "check": page_check, "log": page_log,
+ "practice": lambda: practice_view.render(conn, L, lang, esc, badge, render_lines, students), "about": page_about}[page]()
 ss["_last_lang"] = lang
