@@ -272,7 +272,9 @@ def build(conn, sid: int, lang: str = "ru", model: str | None = None) -> dict:
         "errors": errors, "strengths": strengths, "methods": methods, "habits": habits,
         "methods_by_skill": dict(methods_by_skill),
         "check_rate": check_rate, "teacher": teacher_items, "recs": recs,
-        "n_obs": len(obs), "has_live": any(w["source"] == "live" for w in works),
+        # все строки журнала ученика, как счётчик карты класса: не зависит от отметок и включает тренажёр
+        "n_obs": db.q1(conn, "SELECT COUNT(*) c FROM observations WHERE student_id=?", (sid,))["c"],
+        "has_live": any(w["source"] == "live" for w in works),
     }
 
 

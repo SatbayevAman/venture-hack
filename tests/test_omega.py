@@ -493,3 +493,15 @@ def test_portrait_pages_show_new_methods(app_db):
     assert "Неравенства: какими способами" in _texts(at)
     student = auth.get_user_by_login(app_db, auth.DEMO_STUDENT)
     assert "метод интервалов" in _texts(run_app("portrait", student)).lower()
+
+
+# ---------------------------------------------------------------- O12. «N наблюдений в журнале»
+
+def test_n_obs_does_not_depend_on_marks(conn):
+    sid = _aigerim(conn)
+    n = portrait.build(conn, sid)["n_obs"]
+    class_counter = db.q1(conn, "SELECT COUNT(*) c FROM observations WHERE 1=1 AND student_id IN (?)", (sid,))["c"]
+    assert n == class_counter  # тот же запрос, что в page_class
+    o = db.q1(conn, "SELECT id FROM observations WHERE student_id=? AND kind='error' AND source='auto'", (sid,))["id"]
+    review.add(conn, o, "reject")
+    assert portrait.build(conn, sid)["n_obs"] == n
