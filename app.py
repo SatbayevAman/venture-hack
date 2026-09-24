@@ -218,9 +218,7 @@ def status_note(kind: str, status: str, note: str) -> str:
         return L("верно относительно ошибочной строки", "қате жолға қатысты дұрыс")
     if status == "unparsed":
         return L("не разобрано — поправьте текст", "танылмады — мәтінді түзетіңіз")
-    labels = {"answer": L("ответ", "жауап"), "check": L("проверка", "тексеру"), "domain": L("ОДЗ", "ММЖ"),
-              "rejected": L("отброшен", "алынып тасталды"), "disc": "D", "vieta": L("Виет", "Виет")}
-    out = labels.get(kind, "")
+    out = T.LINE_KINDS.get(kind, {}).get(lang, "")
     if note and note.startswith("✓"):
         out = (out + " ✓").strip()
     elif note and note.startswith("✗"):

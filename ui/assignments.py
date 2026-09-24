@@ -45,7 +45,7 @@ def render(conn, user, L, lang):
     due_t = c[2].time_input(L("до", "дейін"), value=time(23, 59), key=f"asg_time_{ver}")
     n = c[3].number_input(L("Задач", "Есеп"), min_value=1, max_value=MAX_PROBLEMS, value=2, key=f"asg_n_{ver}")
     kinds = roster.problem_kinds()
-    kind_names = {"equation": L("уравнение", "теңдеу"), "expression": L("выражение", "өрнек")}
+    kind_names = {k: v[lang] for k, v in T.KIND_NAMES.items()}
     problems = []
     for i in range(1, int(n) + 1):
         with st.container(border=True):

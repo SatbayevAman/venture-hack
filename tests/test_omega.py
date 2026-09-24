@@ -402,3 +402,32 @@ def test_evaluate_passes_kind_to_score_lines(tmp_path, monkeypatch):
             {"photo": "p.jpg", "problem": "2", "kind": "equation", "statement": "x² = 4"}]
     out, _ = evaluate.recognize_photo(llm.LLMConfig(), "p.jpg", rows, 1)
     assert out[1][0]["flags"] == [] and out[2][0]["flags"] == ["unparsable"]
+
+
+# ---------------------------------------------------------------- O9. подписи видов задач и строк
+
+def test_kind_names_cover_all_kinds():
+    from core import roster
+    from core import tags as T
+    for k in roster.problem_kinds():
+        assert T.KIND_NAMES[k]["ru"] and T.KIND_NAMES[k]["kk"]
+    for k in ("ineq", "signs", "subst", "system", "interval", "point", "answer", "check", "domain", "rejected"):
+        assert T.LINE_KINDS[k]["ru"] and T.LINE_KINDS[k]["kk"]
+
+
+def test_line_kinds_of_new_topics_have_labels():
+    """Каждый вид строки, который выдают проверки Беты на эталонах и ошибках, имеет подпись (кроме служебных)."""
+    from core import tags as T
+    from core.checker import check_problem
+    service = {"eq", "eqs", "root", "text", "numeric", "unparsed", "expr", ""}
+    seen = set()
+    for ex in seed.EXTRA_ASSIGNMENTS:
+        for idx, (_, kind, st, ref, ans) in enumerate(ex["problems"], 1):
+            for lines in [ref, *seed.EXTRA_VARIANTS.get(ex["number"], {}).get(idx, {}).values()]:
+                seen |= {lr.kind for lr in check_problem(kind, st, lines, len(ref), ans).lines}
+    more = [("inequality", "x² − x − 6 ≤ 0", ["x² − x − 6 = 0", "x₁ = 3, x₂ = −2", "x ∈ [−2; 3]"]),
+            ("system", "x + y = 5; x − y = 1", ["{x + y = 5", "⎩x − y = 1", "x = 3, y = 2", "(3; 2)"])]
+    for kind, st, lines in more:
+        seen |= {lr.kind for lr in check_problem(kind, st, lines, None, None).lines}
+    assert {"ineq", "signs", "interval", "subst", "system", "point"} <= seen
+    assert seen - service <= set(T.LINE_KINDS)
