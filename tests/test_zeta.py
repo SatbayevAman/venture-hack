@@ -307,11 +307,12 @@ def test_create_assignment_validates_reference(conn):
     assert db.q1(conn, "SELECT COUNT(*) c FROM assignments")["c"] == n_before  # не сохранено
     live = seed.live_assignment_id(conn)
     number = roster.next_number(conn)
-    assert number == len(seed.HOMEWORKS) + 2
-    aid = roster.create_assignment(conn, "ДЗ №8", "2026-10-01 23:59:00", good)
+    assert number == db.q1(conn, "SELECT MAX(number) m FROM assignments")["m"] + 1
+    aid = roster.create_assignment(conn, f"ДЗ №{number}", "2026-10-01 23:59:00", good)
     assert db.q1(conn, "SELECT number FROM assignments WHERE id=?", (aid,))["number"] == number
     assert len(pipeline.problems_of(conn, aid)) == 2
     assert seed.live_assignment_id(conn) == live  # живое демо — по-прежнему ДЗ №7
+    assert db.q1(conn, "SELECT number FROM assignments WHERE id=?", (live,))["number"] == len(seed.HOMEWORKS) + 1
     # работа по новому заданию проверяется как обычно
     first = pipeline.problems_of(conn, aid)[0]
     res = pipeline.run_checks(conn, aid, {first["id"]: ["(x − 2)(x − 3) = 0", "x = 2 или x = 3"]})

@@ -14,9 +14,12 @@ import pandas as pd
 import streamlit as st
 
 from core import audit, auth, consent, db, llm, pipeline, portrait, seed
+from core import ocr, ocr_store
 from core import tags as T
 from core.tags import question_for, tag_comment_keywords
+from ui import dynamics as dynamics_view
 from ui import login as login_view, manage as manage_view
+from ui import review as review_view
 
 ROOT = Path(__file__).parent
 DB_PATH = os.environ.get("PORTRET_DB", str(ROOT / "data" / "portret.db"))
@@ -96,7 +99,7 @@ def reset_demo():
 
 if "lang" not in ss:
     ss["lang"] = "ru"
-PAGES = ["class", "portrait", "check", "log", "manage", "about"]
+PAGES = ["class", "portrait", "check", "log", "quality", "manage", "about"]
 
 lang = ss["lang"]  # значение радиокнопки уже в session_state до её отрисовки
 
@@ -137,6 +140,7 @@ PAGE_NAMES = {
     "portrait": L("👤 Портрет ученика", "👤 Оқушы портреті"),
     "check": L("📷 Проверка работы", "📷 Жұмысты тексеру"),
     "log": L("📒 Журнал наблюдений", "📒 Бақылау журналы"),
+    "quality": L("📈 Качество", "📈 Сапа"),
     "manage": L("🛡️ Управление", "🛡️ Басқару"),
     "about": L("⚙️ Как это работает", "⚙️ Бұл қалай жұмыс істейді"),
 }
@@ -328,7 +332,7 @@ def page_class():
     c[2].metric(L("Наблюдений в журнале", "Журналдағы бақылау"), n_obs)
     c[3].metric(L("Комментариев учителя", "Мұғалім пікірі"), n_com)
 
-    skills = list(T.SKILLS)
+    skills = [s for s in T.SKILLS if any(r["cells"][s]["total"] for r in rows)] or list(T.SKILLS)
     disp, colors = [], []
     for r in rows:
         d = {L("Ученик", "Оқушы"): r["alias"]}
@@ -336,7 +340,7 @@ def page_class():
         for sk in skills:
             cell = r["cells"][sk]
             name = T.SKILLS_SHORT[sk][lang]
-            d[name] = f"{cell['bad']}/{cell['total']}" if cell["total"] else "—"
+            d[name] = dynamics_view.cell_text(cell)  # «4/6 ▼»: стрелка тренда, если он есть
             col[name] = heat(cell["p"]) if cell["total"] else ""
         chk, n = r["check"]
         d[L("Проверка ответа", "Жауапты тексеру")] = f"{chk}/{n}"
@@ -365,6 +369,8 @@ def page_class():
                  "«Проверка ответа» окрашена тем краснее, чем реже ученик проверяет.",
                  "Түс: жасыл — қате жоқтың қасы, қызыл — жаңа жұмыстардың 60 %-ынан көбінде қате. "
                  "«Жауапты тексеру» оқушы неғұрлым сирек тексерсе, соғұрлым қызыл."))
+    dynamics_view.legend(L)
+    dynamics_view.class_block(rows, L, lang)
 
     # что повторить со всем классом
     common = db.q(conn, """SELECT tag, skill, COUNT(DISTINCT student_id) n, COUNT(*) c FROM observations
@@ -437,6 +443,7 @@ def portrait_teacher(p: dict):
         badges = badge(L("слабое место", "әлсіз тұс"), "b-weak")
         if e["confirmed"]:
             badges += badge(L("подтверждено дважды: работы + учитель", "екі рет расталды: жұмыс + мұғалім"), "b-conf")
+        badges += review_view.precision_badge(conn, e["tag"], L)
         det = f" ({esc(e['detail'])})" if e["detail"] else ""
         st.markdown(f'<div class="card"><h4>{esc(t)} · {esc(T.skill_name(e["skill"], lang).lower())} {badges}</h4>'
                     f'{esc(portrait.share_text(e["count"], e["total"], lang))}{det}. '
@@ -445,6 +452,7 @@ def portrait_teacher(p: dict):
         with st.expander(L(f"Доказательства ({len(e['refs'])}): работа, строка", f"Дәлелдер ({len(e['refs'])}): жұмыс, жол")):
             for r in e["refs"]:
                 show_ref_work(r)
+                review_view.controls(conn, r.get("obs_id"), L, key=f"rv_{p['student']['id']}_{r.get('obs_id')}")
     low = [e for e in p["errors"] if not e["weak"]]
     if low:
         st.markdown("**" + L("Наблюдаем, но выводов пока нет", "Бақылап жүрміз, әзірге қорытынды жоқ") + "**")
@@ -519,6 +527,7 @@ def portrait_teacher(p: dict):
         if r["refs"]:
             st.markdown('<div class="ref">' + L("Опора: ", "Негіз: ") + esc("; ".join(ref_label(x) for x in r["refs"]))
                         + "</div>", unsafe_allow_html=True)
+        dynamics_view.rec_controls(conn, p["student"]["id"], r, L, lang, key=f"{p['student']['id']}_{r['key']}")
         st.write("")
     if len(recs) > 3:
         with st.expander(L(f"Ещё {len(recs) - 3}", f"Тағы {len(recs) - 3}")):
@@ -543,6 +552,9 @@ def portrait_teacher(p: dict):
             com = db.q(conn, "SELECT text FROM teacher_comments WHERE submission_id=?", (w["id"],))
             for cmt in com:
                 st.markdown(f"💬 *{esc(cmt['text'])}*")
+
+    dynamics_view.render_section(conn, p, L, lang)
+    review_view.rating_form(conn, p, L)
 
 
 def portrait_student(p: dict):
@@ -594,27 +606,133 @@ def page_check():
     tab_photo, tab_text = st.tabs([L("📷 Фото тетради", "📷 Дәптер фотосы"), L("⌨️ Ввести текстом", "⌨️ Мәтінмен енгізу")])
     cfg = ss["llm_cfg"]
     with tab_photo:
-        up = st.file_uploader(L("Фото решения (jpg, png)", "Шешім фотосы (jpg, png)"), type=["jpg", "jpeg", "png", "webp"],
+        types = ", ".join(t for t in llm.PHOTO_TYPES if t not in ("jpeg", "heif"))
+        up = st.file_uploader(L(f"Фото решения ({types})", f"Шешім фотосы ({types})"), type=llm.PHOTO_TYPES,
                               key=f"photo_{aid}")
-        if up is not None:
-            st.image(up, width=420)
         if not cfg.ready:
             st.info(L("Для распознавания почерка подключите языковую модель в боковой панели. "
                       "Запасной путь — вкладка «Ввести текстом»: журнал и портрет работают так же.",
                       "Қолжазбаны тану үшін бүйір панельде тілдік модельді қосыңыз. "
                       "Балама жол — «Мәтінмен енгізу» қойындысы: журнал мен портрет дәл солай жұмыс істейді."))
-        if st.button(L("Распознать строки", "Жолдарды тану"), disabled=not (cfg.ready and up is not None), type="primary"):
+        c_btn, c_tgl = st.columns([1, 2])
+        passes = 2 if c_tgl.toggle(L("Два прочтения (точнее, дороже)", "Екі рет оқу (дәлірек, қымбатырақ)"),
+                                   key="ocr_two_passes", value=False,
+                                   help=L("Фото читается дважды разными запросами; строки, где прочтения разошлись, "
+                                          "помечаются ⚠️ и показывают оба варианта.",
+                                          "Фото екі түрлі сұраумен екі рет оқылады; оқулар сәйкес келмеген жолдар "
+                                          "⚠️ белгіленіп, екі нұсқасы да көрсетіледі.")) else 1
+        if c_btn.button(L("Распознать строки", "Жолдарды тану"), disabled=not (cfg.ready and up is not None), type="primary"):
             try:
+                t0 = datetime.now()
                 with st.spinner(L("Распознаю почерк…", "Қолжазбаны танып жатырмын…")):
-                    res = llm.recognize(cfg, up.getvalue(), [(p["idx"], p["statement"]) for p in probs])
-                for p in probs:
-                    if p["idx"] in res:
-                        ss[f"lines_{aid}_{p['id']}"] = "\n".join(res[p["idx"]])
+                    det = llm.recognize_detailed(cfg, up.getvalue(), [(p["idx"], p["statement"]) for p in probs], passes=passes)
+
+                def _prep(lines):
+                    out = []
+                    for l in lines:
+                        l = {**l, "text": ocr.clean_text(l["text"])}
+                        if l.get("alternatives"):
+                            l["alternatives"] = [ocr.clean_text(a) for a in l["alternatives"]]
+                        out.append(l)
+                    return ocr.score_lines(out)
+                ss["ocr_view"] = {p["id"]: _prep(det.get(p["idx"], [])) for p in probs}
+                ss["ocr_raw"] = {pid: list(ls) for pid, ls in ss["ocr_view"].items()}
+                ss["ocr_unassigned"] = _prep(det.get(llm.UNASSIGNED, []))
+                ss["ocr_aid"], ss["ocr_run"] = aid, ss.get("ocr_run", 0) + 1
+                ss["ocr_secs"] = (datetime.now() - t0).total_seconds()
                 ss["photo_name"] = up.name
-                st.success(L("Готово. Проверьте строки во вкладке «Ввести текстом» — там их можно поправить.",
-                             "Дайын. Жолдарды «Мәтінмен енгізу» қойындысында тексеріп, түзетуге болады."))
+                ss.pop("ocr_accepted", None)
             except llm.LLMError as ex:
                 st.error(str(ex))
+
+        raw = ss.get("ocr_view") if ss.get("ocr_aid") == aid else None  # как прочитала модель — для таблиц
+
+        def _cell(v) -> str:  # ячейка таблицы → строка (пустые и удалённые ячейки — None/NaN)
+            return "" if v is None or (isinstance(v, float) and pd.isna(v)) else str(v).strip()
+        flag_name = {"illegible": L("неразборчиво", "анық оқылмайды"), "unparsable": L("не разбирается", "талданбайды"),
+                     "disagree": L("прочтения разошлись", "оқулар сәйкес келмейді")}
+        if raw is None and up is not None:
+            st.image(llm.prepare_image(up.getvalue())[0], width=420)
+        if raw is not None:
+            c_img, c_tab = st.columns([1, 1.35])
+            with c_img:
+                if up is not None:
+                    st.image(llm.prepare_image(up.getvalue())[0], use_container_width=True)
+                else:
+                    st.caption(L("Фото не сохраняется. Загрузите его снова, чтобы сверять строки рядом с ним.",
+                                 "Фото сақталмайды. Жолдарды қасында салыстыру үшін оны қайта жүктеңіз."))
+            with c_tab:
+                all_lines = [l for ls in raw.values() for l in ls] + list(ss.get("ocr_unassigned") or [])
+                n_bad = sum(ocr.needs_review(l) for l in all_lines)
+                few = n_bad % 10 in (2, 3, 4) and n_bad % 100 not in (12, 13, 14)
+                one = n_bad % 10 == 1 and n_bad % 100 != 11
+                msg = L(f"{n_bad} {'строка' if one else 'строки' if few else 'строк'} из {len(all_lines)} "
+                        f"{'требует' if one else 'требуют'} проверки",
+                        f"{len(all_lines)} жолдың {n_bad}-і тексеруді қажет етеді")
+                (st.warning if n_bad else st.success)(("⚠️ " if n_bad else "✅ ") + msg
+                                                      + f" · {ss.get('ocr_secs', 0):.0f} {L('с', 'с')}")
+                run = ss.get("ocr_run", 0)
+                edited = {}
+                for p in probs:
+                    lines = raw.get(p["id"], [])
+                    two = any(l.get("alternatives") for l in lines)
+                    df = pd.DataFrame([{
+                        "no": i, "text": l["text"], "conf": round(l["confidence"] * 100),
+                        "flag": ("⚠️ " + flag_name[l["flags"][0]]) if ocr.needs_review(l) and l["flags"] else "",
+                        **({"alt": (l.get("alternatives") or ["", ""])[1] if l.get("alternatives") else "",
+                            "take": False} if two else {}),
+                    } for i, l in enumerate(lines, 1)], columns=["no", "text", "conf", "flag"] + (["alt", "take"] if two else []))
+                    st.markdown(f"**№{p['idx']}.** {esc(p['statement'])}")
+                    cols = {"no": st.column_config.NumberColumn("№", disabled=True, width="small"),
+                            "text": st.column_config.TextColumn(L("Строка", "Жол")),
+                            "conf": st.column_config.NumberColumn(L("Уверенность", "Сенімділік"), format="%d %%",
+                                                                  disabled=True, width="small"),
+                            "flag": st.column_config.TextColumn(L("Флаг", "Белгі"), disabled=True)}
+                    if two:
+                        cols["alt"] = st.column_config.TextColumn(L("Второе прочтение", "Екінші оқу"), disabled=True)
+                        cols["take"] = st.column_config.CheckboxColumn(L("Взять его", "Соны алу"), width="small")
+                    order = ["no", "text"] + (["alt", "take"] if two else []) + ["conf", "flag"]
+                    edited[p["id"]] = st.data_editor(df, column_config=cols, column_order=order, hide_index=True,
+                                                     num_rows="dynamic",
+                                                     use_container_width=True, key=f"ocr_ed_{aid}_{p['id']}_{run}")
+                loose = ss.get("ocr_unassigned") or []
+                loose_df = None
+                if loose:
+                    st.markdown("**" + L("Строки без задачи", "Есепке жатпайтын жолдар") + "**")
+                    st.caption(L("Модель не поняла, к какой задаче относятся эти строки. Выберите задачу или оставьте «—».",
+                                 "Модель бұл жолдардың қай есепке жататынын анықтамады. Есепті таңдаңыз немесе «—» қалдырыңыз."))
+                    opts = ["—"] + [f"№{p['idx']}" for p in probs]
+                    loose_df = st.data_editor(
+                        pd.DataFrame([{"text": l["text"], "conf": round(l["confidence"] * 100), "to": "—"} for l in loose]),
+                        column_config={"text": st.column_config.TextColumn(L("Строка", "Жол"), width="large"),
+                                       "conf": st.column_config.NumberColumn(L("Уверенность", "Сенімділік"), format="%d %%",
+                                                                             disabled=True, width="small"),
+                                       "to": st.column_config.SelectboxColumn(L("Задача", "Есеп"), options=opts, required=True)},
+                        hide_index=True, use_container_width=True, key=f"ocr_loose_{aid}_{run}")
+                if st.button(L("Принять строки", "Жолдарды қабылдау"), type="primary", use_container_width=True):
+                    new_raw = {pid: list(ls) for pid, ls in raw.items()}
+                    for p in probs:
+                        texts = []
+                        for _, row in edited[p["id"]].iterrows():
+                            take = row.get("take")
+                            t = _cell(row.get("alt") if pd.notna(take) and bool(take) else row.get("text"))
+                            if t:
+                                texts.append(t)
+                        if loose_df is not None:
+                            for (_, row), l in zip(loose_df.iterrows(), loose):
+                                if row["to"] == f"№{p['idx']}" and _cell(row["text"]):
+                                    texts.append(_cell(row["text"]))
+                                    new_raw[p["id"]].append(l)  # строка из распознавания — для учёта правок
+                        ss[f"lines_{aid}_{p['id']}"] = "\n".join(texts)
+                    ss["ocr_raw"] = new_raw  # + строки без задачи, которые учитель отнёс к задаче
+                    ss["ocr_accepted"] = True
+                    st.rerun()
+                if ss.get("ocr_accepted"):
+                    es = ocr.edit_stats(ss.get("ocr_raw") or raw, {p["id"]: ss.get(f"lines_{aid}_{p['id']}", "").splitlines() for p in probs})
+                    st.success(L(f"Строки приняты: исправлено {es['edited']} из {es['total']}. "
+                                 "Нажмите «Проверить» ниже или поправьте текст во вкладке «Ввести текстом».",
+                                 f"Жолдар қабылданды: {es['total']} жолдың {es['edited']}-і түзетілді. "
+                                 "Төмендегі «Тексеру» батырмасын басыңыз немесе мәтінді «Мәтінмен енгізу» қойындысында түзетіңіз."))
         st.caption(L("Фото не сохраняется: после распознавания в базе остаются только строки текста.",
                      "Фото сақталмайды: танылғаннан кейін базада тек мәтін жолдары қалады."))
     with tab_text:
@@ -634,6 +752,7 @@ def page_check():
         with st.spinner(L("Проверяю шаги…", "Қадамдарды тексеріп жатырмын…")):
             results = pipeline.run_checks(conn, aid, answers)
         ss["check"] = {"sid": sid, "aid": aid, "answers": answers, "results": results, "saved": False}
+        review_view.timer_start(ss, sid, aid)
         ss.pop("diff", None)
 
     chk = ss.get("check")
@@ -667,6 +786,10 @@ def page_check():
             st.markdown(f'<div class="q"><b>{L("Наводящий вопрос ученику", "Оқушыға бағыттаушы сұрақ")}</b><br>'
                         f'{esc(question_for(fe, lang))}<br><span class="muted">{esc(question_for(fe, other))}</span></div>',
                         unsafe_allow_html=True)
+            if ocr.error_unverified(pid, res, ocr.unverified(ss.get("ocr_raw") or {}, chk["answers"])):
+                st.warning(L("⚠️ Ошибка найдена в строке, которую распознавание прочитало неуверенно. "
+                             "Сверьте её с фото перед записью.",
+                             "⚠️ Қате тану сенімсіз оқыған жолдан табылды. Журналға жазбас бұрын оны фотомен салыстырыңыз."))
             with st.expander(L("Для учителя: что нашла проверка", "Мұғалімге: тексеру не тапты")):
                 det = fe.get("detail") or {}
                 st.markdown(f"- {L('Тип', 'Түрі')}: **{T.name(fe['tag'], lang)}**\n"
@@ -677,6 +800,8 @@ def page_check():
                     st.markdown(f"- {L('Выражение', 'Өрнек')}: `{det['f']}`")
                 if res.true_answer is not None:
                     st.markdown(f"- {L('Верный ответ', 'Дұрыс жауап')}: `{'; '.join(f'{v:g}' for v in res.true_answer) or '∅'}`")
+            if not chk["saved"]:
+                review_view.not_error_toggle(aid, pid, L)
 
     st.divider()
     if chk["saved"]:
@@ -686,6 +811,7 @@ def page_check():
                         + "<br>".join(esc(x) for x in d["lines"]) + "</div>", unsafe_allow_html=True)
         else:
             st.success(L("Работа записана в журнал.", "Жұмыс журналға жазылды."))
+        review_view.submission_controls(conn, ss.get("last_sub_id"), L)
         if st.button(L("Открыть портрет →", "Портретті ашу →"), type="primary"):
             go("portrait", sid)
         return
@@ -707,7 +833,11 @@ def page_check():
             pipeline.delete_submission(conn, o["id"])
         before = portrait.snapshot(portrait.build(conn, sid, lang))
         sub_id, _ = pipeline.record_submission(conn, sid, aid, chk["answers"], datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                               photo_name=ss.get("photo_name"), source="live", results=chk["results"])
+                                               photo_name=ss.get("photo_name"), source="live", results=chk["results"],
+                                               line_confidence=ocr.unverified(ss.get("ocr_raw") or {}, chk["answers"]))
+        if ss.get("ocr_raw"):  # журнал распознаваний: что прочитала модель и что оставил учитель
+            ocr_store.save(conn, sub_id, {k: v for k, v in ss["ocr_raw"].items() if k in chk["answers"]}, chk["answers"])
+            ss.pop("ocr_raw", None)
         text = (ss.get("comment_text") or "").strip()
         if text:
             tagged, tagger = None, "keywords"
@@ -717,6 +847,8 @@ def page_check():
                 except llm.LLMError:
                     tagged = None
             pipeline.record_comment(conn, sub_id, text, tagged or tag_comment_keywords(text), tagger)
+        review_view.after_record(conn, ss, sub_id, sid, aid, chk, L)  # время проверки и «это не ошибка»
+        ss["last_sub_id"] = sub_id
         after = portrait.snapshot(portrait.build(conn, sid, lang))
         ss["diff"] = {"sid": sid, "lines": portrait.diff(before, after, lang)}
         audit.log(conn, user, "record_submission", "submission", sub_id)
@@ -743,7 +875,7 @@ def page_log():
                           format_func=lambda x: {"": L("все", "барлығы"), "error": L("ошибка", "қате"),
                                                  "method": L("метод", "тәсіл"), "habit": L("привычка", "әдет"),
                                                  "teacher": L("из комментария", "пікірден")}[x])
-    sql = """SELECT o.created_at, st.alias, a.number, p.idx, o.line_no, o.kind, o.tag, o.skill, o.evidence,
+    sql = """SELECT o.id, o.created_at, st.alias, a.number, p.idx, o.line_no, o.kind, o.tag, o.skill, o.evidence,
                     o.source, o.confidence FROM observations o JOIN students st ON st.id = o.student_id
              LEFT JOIN submissions s ON s.id = o.submission_id LEFT JOIN assignments a ON a.id = s.assignment_id
              LEFT JOIN problems p ON p.id = o.problem_id WHERE 1=1"""
@@ -757,14 +889,23 @@ def page_log():
         sql += " AND o.kind=?"; args.append(kind)
     sql += " ORDER BY o.created_at DESC"
     rows = db.q(conn, sql, args)
+    marks = review_view.log_marks(conn, [r["id"] for r in rows], L)
     df = pd.DataFrame([{
         L("Время", "Уақыт"): r["created_at"][:16], L("Ученик", "Оқушы"): r["alias"],
         L("Работа", "Жұмыс"): f"№{r['number']}" if r["number"] else "", L("Задача", "Есеп"): str(r["idx"] or ""),
         L("Строка", "Жол"): str(r["line_no"] or ""), L("Вид", "Түрі"): r["kind"], L("Тег", "Тег"): T.name(r["tag"], lang),
+        L("Отметка учителя", "Мұғалім белгісі"): marks.get(r["id"], ""),
         L("Навык", "Дағды"): T.skill_name(r["skill"], lang) if r["skill"] else "",
         L("Доказательство", "Дәлел"): r["evidence"], L("Источник", "Көзі"): r["source"],
         L("Уверенность", "Сенімділік"): r["confidence"]} for r in rows])
-    st.dataframe(df, hide_index=True, use_container_width=True, height=520)
+    sel = st.dataframe(df, hide_index=True, use_container_width=True, height=520,
+                       on_select="rerun", selection_mode="single-row", key=f"log_table_{who}_{src}_{kind}")
+    picked = sel.selection.rows if sel else []
+    if picked and picked[0] < len(rows):
+        review_view.log_controls(conn, rows[picked[0]], L)
+    else:
+        st.caption(L("Выберите строку слева в таблице, чтобы поставить отметку учителя.",
+                     "Мұғалім белгісін қою үшін кестеде жолды сол жағынан таңдаңыз."))
     st.download_button(L("Скачать CSV", "CSV жүктеу"), df.to_csv(index=False).encode("utf-8-sig"),
                        "observations.csv", "text/csv", on_click=audit.log, args=(conn, user, "export_csv", "export"))
 
@@ -845,5 +986,6 @@ digraph G { rankdir=LR; node [shape=box, style="rounded,filled", fillcolor="#eef
 
 
 {"class": page_class, "portrait": page_portrait, "check": page_check, "log": page_log,
+ "quality": lambda: review_view.render_quality(conn, L, lang, esc),
  "manage": lambda: manage_view.render(conn, user, L, lang), "about": page_about}[page]()
 ss["_last_lang"] = lang
