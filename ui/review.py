@@ -11,7 +11,7 @@ import time
 import pandas as pd
 import streamlit as st
 
-from core import db, quality, review
+from core import auth, db, quality, review
 from core import tags as T
 
 TIMER_RESET = 30 * 60   # «Проверить» позже чем через 30 мин после первого — это уже новая проверка
@@ -31,30 +31,48 @@ def _pct(x) -> str:
 
 # ---------------------------------------------------------------- отметка на выводе
 
-def mark_label(m: dict | None, L) -> str:
-    """Короткая подпись последней отметки — для бейджа и колонки журнала."""
+def reviewer_name(conn, reviewer, cache: dict | None = None) -> str:
+    """Кто поставил отметку: reviewer — id пользователя строкой (Дзета B5) → его display_name;
+    прежние отметки хранят свободный текст («учитель») — он показывается как есть."""
+    r = str(reviewer or "")
+    if conn is None or not r.isdigit():
+        return r
+    cache = {} if cache is None else cache
+    if r not in cache:
+        u = auth.get_user(conn, int(r))
+        cache[r] = u["display_name"] if u else r
+    return cache[r]
+
+
+def mark_label(m: dict | None, L, conn=None, cache: dict | None = None) -> str:
+    """Короткая подпись последней отметки — для бейджа и колонки журнала.
+    С conn к отметке пользователя (числовой reviewer) дописывается его имя."""
     if not m:
         return ""
     if m["verdict"] == "confirm":
-        return L("✓ верно", "✓ дұрыс")
-    if m["verdict"] == "reject":
-        return L("✗ неверно", "✗ дұрыс емес")
-    return L("↻ другой тег: ", "↻ басқа тег: ") + T.name(m["new_tag"], _lang(L))
+        out = L("✓ верно", "✓ дұрыс")
+    elif m["verdict"] == "reject":
+        out = L("✗ неверно", "✗ дұрыс емес")
+    else:
+        out = L("↻ другой тег: ", "↻ басқа тег: ") + T.name(m["new_tag"], _lang(L))
+    if conn is not None and str(m.get("reviewer") or "").isdigit():
+        out += " · " + reviewer_name(conn, m["reviewer"], cache)
+    return out
 
 
-def mark_badge(m: dict | None, L) -> str:
+def mark_badge(m: dict | None, L, conn=None) -> str:
     if not m:
         return f'<span class="badge b-low">{_e(L("нет отметки учителя", "мұғалім белгісі жоқ"))}</span>'
     cls = {"confirm": "b-ok", "reject": "b-weak", "retag": "b-conf"}[m["verdict"]]
     extra = ""
     if m["verdict"] == "reject":
         extra = L(" · не учитывается в портрете", " · портретте ескерілмейді")
-    who = f'{m.get("reviewer") or ""}, {str(m.get("created_at") or "")[:16]}'.strip(", ")
+    who = f'{reviewer_name(conn, m.get("reviewer"))}, {str(m.get("created_at") or "")[:16]}'.strip(", ")
     note = f' <span class="muted">«{_e(m["comment"])}»</span>' if m.get("comment") else ""
-    return f'<span class="badge {cls}" title="{_e(who)}">{_e(mark_label(m, L) + extra)}</span>{note}'
+    return f'<span class="badge {cls}" title="{_e(who)}">{_e(mark_label(m, L, conn) + extra)}</span>{note}'
 
 
-def controls(conn, obs_id, L, key: str) -> None:
+def controls(conn, obs_id, L, key: str, reviewer=None) -> None:
     """Три кнопки на выводе: «✓ верно», «✗ неверно», «↻ другой тег» + необязательный комментарий."""
     if obs_id is None:
         return
@@ -64,7 +82,7 @@ def controls(conn, obs_id, L, key: str) -> None:
     lang = _lang(L)
     m = review.latest(conn, [obs_id]).get(obs_id)
     st.markdown(f'<div class="muted" style="margin:2px 0 4px 0">{_e(L("Отметка учителя:", "Мұғалім белгісі:"))} '
-                f'{mark_badge(m, L)}</div>', unsafe_allow_html=True)
+                f'{mark_badge(m, L, conn)}</div>', unsafe_allow_html=True)
     c = st.columns([1, 1, 1.25, 2.6])
     comment = c[3].text_input(L("Комментарий", "Пікір"), key=f"{key}_c", label_visibility="collapsed",
                               placeholder=L("комментарий (необязательно)", "пікір (міндетті емес)"))
@@ -84,7 +102,7 @@ def controls(conn, obs_id, L, key: str) -> None:
             verdict, new_tag = "retag", new
     if verdict:
         try:
-            review.add(conn, obs_id, verdict, new_tag=new_tag, comment=comment)
+            review.add(conn, obs_id, verdict, new_tag=new_tag, comment=comment, reviewer=reviewer)
         except ValueError as ex:
             st.error(str(ex))
             return
@@ -120,7 +138,7 @@ def not_error_toggle(aid: int, pid: int, L) -> None:
                 key=f"eps_noterr_{aid}_{pid}")
 
 
-def after_record(conn, ss, sub_id: int, sid: int, aid: int, chk: dict, L) -> None:
+def after_record(conn, ss, sub_id: int, sid: int, aid: int, chk: dict, L, reviewer=None) -> None:
     """После записи в журнал: время проверки и отметки «это не ошибка»."""
     t = ss.pop("eps_timer", None)
     if t and (t["sid"], t["aid"]) == (sid, aid):
@@ -129,10 +147,11 @@ def after_record(conn, ss, sub_id: int, sid: int, aid: int, chk: dict, L) -> Non
                               n_lines=sum(len(r.lines) for r in res.values()))
     pids = [pid for pid in (chk.get("results") or {}) if ss.pop(f"eps_noterr_{aid}_{pid}", False)]
     if pids:
-        review.reject_errors(conn, sub_id, pids, comment=L("до записи: это не ошибка", "жазар алдында: бұл қате емес"))
+        review.reject_errors(conn, sub_id, pids, comment=L("до записи: это не ошибка", "жазар алдында: бұл қате емес"),
+                             reviewer=reviewer)
 
 
-def submission_controls(conn, sub_id, L) -> None:
+def submission_controls(conn, sub_id, L, reviewer=None) -> None:
     """Отметки для ошибок только что записанной работы и для тегов из комментария учителя."""
     if not sub_id:
         return
@@ -148,22 +167,23 @@ def submission_controls(conn, sub_id, L) -> None:
             where = L(f"№{o['problem_idx']}, строка {o['line_no']}", f"№{o['problem_idx']}, {o['line_no']}-жол")
             st.markdown(f"**{_e(where)}: {_e(T.name(o['tag'], lang))}** — <code>{_e(o['evidence'])}</code>",
                         unsafe_allow_html=True)
-            controls(conn, o["id"], L, key=f"eps_sub_{o['id']}")
+            controls(conn, o["id"], L, key=f"eps_sub_{o['id']}", reviewer=reviewer)
         if tchr:
             st.markdown("**" + L("Теги из комментария учителя", "Мұғалім пікіріндегі тегтер") + "**")
             for o in tchr:
                 st.markdown(f"«{_e(o['evidence'])}» → **{_e(T.name(o['tag'], lang))}**", unsafe_allow_html=True)
-                controls(conn, o["id"], L, key=f"eps_sub_{o['id']}")
+                controls(conn, o["id"], L, key=f"eps_sub_{o['id']}", reviewer=reviewer)
 
 
 # ---------------------------------------------------------------- журнал
 
 def log_marks(conn, ids, L) -> dict:
     """{observation_id: подпись последней отметки} — для колонки «Отметка учителя»."""
-    return {i: mark_label(m, L) for i, m in review.latest(conn, ids).items()}
+    cache: dict = {}
+    return {i: mark_label(m, L, conn, cache) for i, m in review.latest(conn, ids).items()}
 
 
-def log_controls(conn, row, L) -> None:
+def log_controls(conn, row, L, reviewer=None) -> None:
     """Отметка выбранной строки журнала."""
     lang = _lang(L)
     st.markdown(f"**{_e(row['alias'])} · {_e(T.name(row['tag'], lang))}** — <code>{_e(row['evidence'])}</code>",
@@ -172,12 +192,12 @@ def log_controls(conn, row, L) -> None:
         st.caption(L("Отметки ставятся на выводы автопроверки и теги из комментариев.",
                      "Белгілер автотексеру қорытындыларына және пікір тегтеріне қойылады."))
         return
-    controls(conn, row["id"], L, key=f"eps_log_{row['id']}")
+    controls(conn, row["id"], L, key=f"eps_log_{row['id']}", reviewer=reviewer)
 
 
 # ---------------------------------------------------------------- похожесть портрета (B3)
 
-def rating_form(conn, p: dict, L) -> None:
+def rating_form(conn, p: dict, L, reviewer=None) -> None:
     lang = _lang(L)
     sid = p["student"]["id"]
     items = {}
@@ -207,7 +227,7 @@ def rating_form(conn, p: dict, L) -> None:
                 if score is None:
                     st.warning(L("Выберите оценку от 1 до 5.", "1-ден 5-ке дейін баға таңдаңыз."))
                 else:
-                    review.add_rating(conn, sid, score, wrong, comment)
+                    review.add_rating(conn, sid, score, wrong, comment, reviewer=reviewer)
                     st.success(L("Оценка сохранена — она попадёт на страницу «Качество».",
                                  "Баға сақталды — ол «Сапа» бетіне түседі."))
 

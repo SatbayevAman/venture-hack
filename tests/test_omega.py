@@ -276,3 +276,27 @@ def test_rate_limit_blocks_personalize(app_db, monkeypatch):
     at = run_app("portrait", teacher, llm_cfg=llm.LLMConfig("anthropic", "test-key", "m", ""))
     click(at, "✨ Привязать советы")
     assert any("Лимит обращений к модели" in w.value for w in at.warning)
+
+
+# ---------------------------------------------------------------- O6. reviewer — id пользователя
+
+def test_reviewer_shown_as_user_name(conn):
+    from ui import review as review_view
+    L = lambda ru, kk: ru  # noqa: E731
+    uid = auth.create_user(conn, "t_rev", "Учитель Иванова", "teacher", "password-rv1", classes=[seed.CLASS_NAME])
+    o1, o2 = [r["id"] for r in db.q(conn, "SELECT id FROM observations WHERE kind='error' ORDER BY id LIMIT 2")]
+    review.add(conn, o1, "confirm", reviewer=str(uid))
+    review.add(conn, o2, "reject")  # старая отметка: reviewer по умолчанию «учитель»
+    marks = review.latest(conn, [o1, o2])
+    assert marks[o1]["reviewer"] == str(uid) and marks[o2]["reviewer"] == review.DEFAULT_REVIEWER
+    assert "Учитель Иванова" in review_view.mark_badge(marks[o1], L, conn)
+    assert review_view.mark_badge(marks[o2], L, conn) == review_view.mark_badge(marks[o2], L)  # как раньше
+    assert review_view.log_marks(conn, [o1, o2], L) == {o1: "✓ верно · Учитель Иванова", o2: "✗ неверно"}
+
+
+def test_marks_from_app_store_user_id(app_db):
+    teacher = auth.get_user_by_login(app_db, auth.DEMO_TEACHER)
+    at = record_demo_work(run_app("check", teacher))
+    click(at, "✓ верно")
+    r = db.q1(app_db, "SELECT reviewer FROM reviews ORDER BY id DESC LIMIT 1")
+    assert r["reviewer"] == str(teacher["id"])

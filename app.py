@@ -135,6 +135,7 @@ def remember(name: str, value):
 user = login_view.gate(conn, L)          # без входа рисует форму и вызывает st.stop()
 PAGES = auth.allowed_pages(user, PAGES)
 is_admin = user["role"] == "admin"
+REVIEWER = str(user["id"]) if user.get("id") is not None else None  # отметки учителя — с id пользователя (Дзета B5)
 
 PAGE_NAMES = {
     "class": L("🏫 Карта класса", "🏫 Сынып картасы"),
@@ -463,7 +464,8 @@ def portrait_teacher(p: dict):
         with st.expander(L(f"Доказательства ({len(e['refs'])}): работа, строка", f"Дәлелдер ({len(e['refs'])}): жұмыс, жол")):
             for r in e["refs"]:
                 show_ref_work(r)
-                review_view.controls(conn, r.get("obs_id"), L, key=f"rv_{p['student']['id']}_{r.get('obs_id')}")
+                review_view.controls(conn, r.get("obs_id"), L, key=f"rv_{p['student']['id']}_{r.get('obs_id')}",
+                                     reviewer=REVIEWER)
     low = [e for e in p["errors"] if not e["weak"]]
     if low:
         st.markdown("**" + L("Наблюдаем, но выводов пока нет", "Бақылап жүрміз, әзірге қорытынды жоқ") + "**")
@@ -568,7 +570,7 @@ def portrait_teacher(p: dict):
                 st.markdown(f"💬 *{esc(cmt['text'])}*")
 
     dynamics_view.render_section(conn, p, L, lang)
-    review_view.rating_form(conn, p, L)
+    review_view.rating_form(conn, p, L, reviewer=REVIEWER)
 
 
 def portrait_student(p: dict):
@@ -829,7 +831,7 @@ def page_check():
                         + "<br>".join(esc(x) for x in d["lines"]) + "</div>", unsafe_allow_html=True)
         else:
             st.success(L("Работа записана в журнал.", "Жұмыс журналға жазылды."))
-        review_view.submission_controls(conn, ss.get("last_sub_id"), L)
+        review_view.submission_controls(conn, ss.get("last_sub_id"), L, reviewer=REVIEWER)
         if st.button(L("Открыть портрет →", "Портретті ашу →"), type="primary"):
             go("portrait", sid)
         return
@@ -865,7 +867,7 @@ def page_check():
                 except llm.LLMError:
                     tagged = None
             pipeline.record_comment(conn, sub_id, text, tagged or tag_comment_keywords(text), tagger)
-        review_view.after_record(conn, ss, sub_id, sid, aid, chk, L)  # время проверки и «это не ошибка»
+        review_view.after_record(conn, ss, sub_id, sid, aid, chk, L, reviewer=REVIEWER)  # время проверки и «это не ошибка»
         ss["last_sub_id"] = sub_id
         after = portrait.snapshot(portrait.build(conn, sid, lang))
         ss["diff"] = {"sid": sid, "lines": portrait.diff(before, after, lang)}
@@ -920,7 +922,7 @@ def page_log():
                        on_select="rerun", selection_mode="single-row", key=f"log_table_{who}_{src}_{kind}")
     picked = sel.selection.rows if sel else []
     if picked and picked[0] < len(rows):
-        review_view.log_controls(conn, rows[picked[0]], L)
+        review_view.log_controls(conn, rows[picked[0]], L, reviewer=REVIEWER)
     else:
         st.caption(L("Выберите строку слева в таблице, чтобы поставить отметку учителя.",
                      "Мұғалім белгісін қою үшін кестеде жолды сол жағынан таңдаңыз."))
