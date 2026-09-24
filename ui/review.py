@@ -321,6 +321,11 @@ def render_quality(conn, L, lang: str, esc, student_ids=None, user=None) -> None
                   "строки решения как в тетради, номер первой неверной строки и тег ошибки.",
                   "eval/labels.csv файлы жоқ. Оны eval/README.md нұсқаулығы бойынша толтырыңыз: бір жол — бір есеп, "
                   "шешім жолдары дәптердегідей, алғашқы қате жолдың нөмірі және қате тегі."))
+    elif not ev["n"] and ev.get("n_draft"):  # O14: черновики не считаются — как в `python evaluate.py`
+        st.info(L(f"В eval/labels.csv только черновики ({ev['n_draft']}): проверьте эталон по фото и уберите пометку "
+                  "draft — см. eval/README.md.",
+                  f"eval/labels.csv-те тек нобайлар ({ev['n_draft']}): эталонды фото бойынша тексеріп, draft белгісін "
+                  "алып тастаңыз — eval/README.md қараңыз."))
     elif not ev["n"]:
         st.info(L("В eval/labels.csv нет строк — см. eval/README.md.", "eval/labels.csv-те жол жоқ — eval/README.md қараңыз."))
     else:
@@ -336,7 +341,9 @@ def render_quality(conn, L, lang: str, esc, student_ids=None, user=None) -> None
             hide_index=True, use_container_width=True)
         st.caption(L("Та же цифра, что даёт `python evaluate.py` (без распознавания фото). "
                      "Разметка — eval/labels.csv, инструкция — eval/README.md.",
-                     "`python evaluate.py` беретін сан (фото танусыз). Белгілеу — eval/labels.csv, нұсқаулық — eval/README.md."))
+                     "`python evaluate.py` беретін сан (фото танусыз). Белгілеу — eval/labels.csv, нұсқаулық — eval/README.md.")
+                   + (L(f" Черновиков пропущено: {ev['n_draft']}.", f" Өткізілген нобайлар: {ev['n_draft']}.")
+                      if ev.get("n_draft") else ""))
 
     # ---- 4. время проверки
     st.header(L("4. Время проверки", "4. Тексеру уақыты"))
