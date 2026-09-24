@@ -19,6 +19,7 @@
     error_line       — номер первой неверной строки (0, если решение верное)
     error_tag        — тег ошибки (lost_root, extra_root, sign, fsu, calc, other) или пусто
     status           — необязательно; draft — черновик из --draft, человек ещё не проверил эталон
+                       (такие строки пропускаются); synthetic — работа из eval/make_synthetic.py
 
 Запуск:
     python evaluate.py                                   # только проверка на эталонных строках
@@ -156,6 +157,9 @@ def main() -> None:
     all_rows, _ = read_labels(args.labels)
     rows = [r for r in all_rows if (r.get("status") or "").strip() != "draft"]
     n_draft = len(all_rows) - len(rows)
+    synthetic = any((r.get("status") or "").strip() == "synthetic" for r in rows)
+    if synthetic:
+        print("⚠️  В разметке есть СИНТЕТИЧЕСКИЕ работы (status=synthetic) — это дымовой тест, не цифры для слайда.\n")
 
     by_photo: dict = {}
     times: list = []
@@ -253,7 +257,8 @@ def main() -> None:
         md = [f"# Точность распознавания и проверки — {date.today():%d.%m.%Y}", "",
               f"Модель: {cfg.label() if args.ocr else '— (только проверка на эталонных строках)'}"
               + (f", прочтений: {args.passes}" if args.ocr else ""),
-              "Данные: реальные работы из `eval/labels.csv` (без черновиков).", "",
+              ("**⚠️ СИНТЕТИЧЕСКИЙ набор (рукописный шрифт, eval/make_synthetic.py) — дымовой тест, не для слайда.**"
+               if synthetic else f"Данные: реальные работы из `{Path(args.labels).as_posix()}` (без черновиков)."), "",
               "| Метрика | Значение |", "|---|---|"]
         md += [f"| {k} | {v} |" for k, v in summary]
         if calib:

@@ -1,0 +1,35 @@
+photo,problem,kind,statement,lines,error_line,error_tag,status
+synthetic/syn_001.png,1,equation,5x − 7 = 2x + 8,5x − 2x = 8 − 7 | 3x = 1 | x = 1/3 | Ответ: 1/3,1,sign,synthetic
+synthetic/syn_002.png,1,equation,2(x − 3) + 4 = 3x − 1,2x + 6 + 4 = 3x − 1 | 2x − 3x = −1 − 10 | −x = −11 | x = 11 | Ответ: 11 | Проверка: 2((−1) − 3) + 4 = 3·(−1) − 1 ✓,1,sign,synthetic
+synthetic/syn_003.png,1,expression,(b + 5)(b − 5) − b(b − 2),b² + 25 − (b² − 2b) | b² + 25 − b² + 2b | 2b + 25,1,fsu,synthetic
+synthetic/syn_004.png,1,equation,x² + 2x − 3 = 0,(x + 3)(x − 1) = 0 | x = −3 или x = 1 | Ответ: −3; 1,0,,synthetic
+synthetic/syn_005.png,1,expression,(a + 3)² − (a − 3)(a + 3),a² + 9 − (a² − 9) | a² + 9 − a² + 9 | 18,1,fsu,synthetic
+synthetic/syn_006.png,1,equation,4(x + 1) = 2x − 6,4x + 4 = 2x − 6 | 4x − 2x = −6 + 4 | 2x = −2 | x = −1 | Ответ: −1 | Проверка: 4((−5) + 1) = 2·(−5) − 6 ✓,2,sign,synthetic
+synthetic/syn_007.png,1,equation,x²/(x + 3) = 9/(x + 3),ОДЗ: x ≠ −3 | x² = 9 | x² − 9 = 0 | D = 0 + 36 = 36 | x₁ = 6/2 = 3 | x₂ = −6/2 = −3 | x = −3 не подходит | Ответ: 3,0,,synthetic
+synthetic/syn_008.png,1,equation,x² = 5x,x² − 5x = 0 | x(x − 5) = 0 | x = 0 или x = 5 | Ответ: 0; 5,0,,synthetic
+synthetic/syn_009.png,1,equation,x² − 5x + 6 = 0,D = (−5)² − 4·6 = 25 − 24 = 9 | x₁ = (5 + 3)/2 = 4 | x₂ = (5 − 3)/2 = 1 | Ответ: 1; 4,1,calc,synthetic
+synthetic/syn_010.png,1,expression,(y − 3)² − (y + 3)²,y² − 6y + 9 − (y² + 6y + 9) | y² − 6y + 9 − y² − 6y − 9 | −12y,0,,synthetic
+synthetic/syn_011.png,1,equation,x² − 7x + 12 = 0,"x₁ + x₂ = 7 | x₁ · x₂ = 12 | x₁ = 3, x₂ = 4 | Ответ: 3; 4",0,,synthetic
+synthetic/syn_012.png,1,equation,x² = 5x,x² − 5x = 0 | x(x − 5) = 0 | x = 0 или x = 5 | Ответ: 0; 5,0,,synthetic
+synthetic/syn_013.png,1,equation,3x² = 12x,3x = 12 | x = 4 | Ответ: 4,1,lost_root,synthetic
+synthetic/syn_014.png,1,equation,(x + 1)(x − 4) = 3(x − 4),x + 1 = 3 | x = 2 | Ответ: 2,1,lost_root,synthetic
+synthetic/syn_015.png,1,equation,x(x − 3) = 2(x − 3),x(x − 3) − 2(x − 3) = 0 | (x − 3)(x − 2) = 0 | x = 3 или x = 2 | Ответ: 2; 3,0,,synthetic
+synthetic/syn_016.png,1,expression,(a + 3)² − (a − 3)(a + 3),6a + 18,0,,synthetic
+synthetic/syn_017.png,1,equation,3x + 5 = x − 3,3x − x = −3 + 5 | 2x = 2 | x = 1 | Ответ: 1 | Проверка: 3·(−4) + 5 = (−4) − 3 ✓,1,sign,synthetic
+synthetic/syn_018.png,1,equation,(x + 1)(x − 4) = 3(x − 4),(x + 1)(x − 4) − 3(x − 4) = 0 | (x − 4)(x + 1 − 3) = 0 | (x − 4)(x − 2) = 0 | x = 4 или x = 2 | Ответ: 2; 4,0,,synthetic
+synthetic/syn_019.png,1,equation,x² + 2x − 3 = 0,D = 2² − 4·(−3) = 4 + 12 = 16 | x₁ = (−2 + 4)/2 = 1 | x₂ = (−2 − 4)/2 = −3 | Ответ: −3; 1,0,,synthetic
+synthetic/syn_020.png,1,equation,3x + 5 = x − 3,3x − x = −3 − 5 | 2x = −8 | x = −4 | Ответ: −4,0,,synthetic
+synthetic/syn_021.png,1,expression,3(x − 2) − 2(x + 1),3x − 6 − 2x + 2 | x − 4,1,sign,synthetic
+synthetic/syn_022.png,1,equation,x² − 7x + 10 = 0,(x − 2)(x − 5) = 0 | x = 2 или x = 5 | Ответ: 2; 5 | Проверка: 5² − 7·5 + 10 = 0 ✓,0,,synthetic
+synthetic/syn_023.png,1,expression,(x − 2)² + 4x,x² − 4x + 4 + 4x | x² + 4,0,,synthetic
+synthetic/syn_024.png,1,expression,(x − 2)² + 4x,x² − 4 + 4x | x² + 4x − 4,1,fsu,synthetic
+synthetic/syn_025.png,1,equation,x(x − 3) = 2(x − 3),x = 2 | Ответ: 2,1,lost_root,synthetic
+synthetic/syn_026.png,1,equation,(x + 1)(x − 4) = 3(x − 4),x + 1 = 3 | x = 2 | Ответ: 2,1,lost_root,synthetic
+synthetic/syn_027.png,1,equation,x² − 7x + 12 = 0,D = (−7)² − 4·12 = 49 − 48 = 1 | x₁ = (7 + 1)/2 = 4 | x₂ = (7 − 1)/2 = 3 | Ответ: 3; 4,0,,synthetic
+synthetic/syn_028.png,1,expression,(2b + 1)² − 4b²,4b + 1,0,,synthetic
+synthetic/syn_029.png,1,equation,x(x − 3) = 2(x − 3),x = 2 | Ответ: 2,1,lost_root,synthetic
+synthetic/syn_030.png,1,equation,x² + 2x − 3 = 0,D = 2² − 4·(−3) = 4 + 12 = 36 | x₁ = (−2 + 6)/2 = 2 | x₂ = (−2 − 6)/2 = −4 | Ответ: −4; 2,1,calc,synthetic
+synthetic/syn_live_hw7.png,1,equation,2x − 9 = 5x + 3,2x − 5x = 3 + 9 | −3x = 12 | x = −4 | Ответ: −4,0,,synthetic
+synthetic/syn_live_hw7.png,2,equation,x² − 6x + 5 = 0,D = (−6)² − 4·5 = 36 − 20 = 16 | x₁ = (6 + 4)/2 = 5 | x₂ = (6 − 4)/2 = 1 | Ответ: 1; 5,0,,synthetic
+synthetic/syn_live_hw7.png,3,equation,x² = 7x,x = 7 | Ответ: 7,1,lost_root,synthetic
+synthetic/syn_live_hw7.png,4,expression,(m − 4)² + 8m,m² − 8m + 16 + 8m | m² + 16,0,,synthetic

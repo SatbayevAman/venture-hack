@@ -606,7 +606,7 @@ def page_check():
                 one = n_bad % 10 == 1 and n_bad % 100 != 11
                 msg = L(f"{n_bad} {'строка' if one else 'строки' if few else 'строк'} из {len(all_lines)} "
                         f"{'требует' if one else 'требуют'} проверки",
-                        f"{len(all_lines)} жолдың {n_bad}-і тексеруді қажет етеді")
+                        f"Тексеруді қажет ететін жолдар: {n_bad} / {len(all_lines)}")
                 (st.warning if n_bad else st.success)(("⚠️ " if n_bad else "✅ ") + msg
                                                       + f" · {ss.get('ocr_secs', 0):.0f} {L('с', 'с')}")
                 run = ss.get("ocr_run", 0)
@@ -669,7 +669,7 @@ def page_check():
                     es = ocr.edit_stats(ss.get("ocr_raw") or raw, {p["id"]: ss.get(f"lines_{aid}_{p['id']}", "").splitlines() for p in probs})
                     st.success(L(f"Строки приняты: исправлено {es['edited']} из {es['total']}. "
                                  "Нажмите «Проверить» ниже или поправьте текст во вкладке «Ввести текстом».",
-                                 f"Жолдар қабылданды: {es['total']} жолдың {es['edited']}-і түзетілді. "
+                                 f"Жолдар қабылданды. Түзетілген жолдар: {es['edited']} / {es['total']}. "
                                  "Төмендегі «Тексеру» батырмасын басыңыз немесе мәтінді «Мәтінмен енгізу» қойындысында түзетіңіз."))
         st.caption(L("Фото не сохраняется: после распознавания в базе остаются только строки текста.",
                      "Фото сақталмайды: танылғаннан кейін базада тек мәтін жолдары қалады."))

@@ -321,3 +321,68 @@ def test_error_unverified_rules():
     assert ocr.error_unverified(1, res2, {(1, 1): 0.4})          # строка «до» перехода
     assert ocr.error_unverified(1, res2, {(1, 2): 0.4})          # строка ошибки
     assert not ocr.error_unverified(1, res2, {(1, 2): 0.95})     # уверенная строка
+
+
+# ---------------------------------------------------------------- evaluate.py целиком (с подменой модели)
+
+def _eval_env(monkeypatch, tmp_path, reply):
+    (tmp_path / "p.jpg").write_bytes(PNG)
+    monkeypatch.setattr(evaluate, "ROOT", tmp_path)
+    monkeypatch.setattr(llm, "config_from_env", lambda secrets=None: CFG)
+    fake_call(monkeypatch, [reply] * 10)
+
+
+def test_evaluate_ocr_metrics(monkeypatch, tmp_path, capsys):
+    reply = json.dumps({"problems": [{"number": 1, "lines": [{"text": "x = 5", "unsure": []},
+                                                             {"text": "Ответ: ?", "unsure": []}]},
+                                     {"number": 2, "lines": [{"text": "2x = 2", "unsure": []}, {"text": "x = 1", "unsure": []}]}]},
+                       ensure_ascii=False)
+    _eval_env(monkeypatch, tmp_path, reply)
+    labels = tmp_path / "labels.csv"
+    labels.write_text("photo,problem,kind,statement,lines,error_line,error_tag,status\n"
+                      "p.jpg,1,equation,x² = 5x,x = 5 | Ответ: 5,1,lost_root,\n"
+                      "p.jpg,2,equation,3x + 5 = x + 7,2x = 2 | x = 1,0,,\n"
+                      "p.jpg,3,equation,x = 1,x = 1,0,,draft\n", encoding="utf-8")
+    out = tmp_path / "results.md"
+    monkeypatch.setattr("sys.argv", ["evaluate.py", "--ocr", "--labels", str(labels), "--out", str(out)])
+    evaluate.main()
+    md = out.read_text(encoding="utf-8")
+    assert "| Строк верно без правки (G1, цель ≥ 90 %) | 3/4 = 75% |" in md
+    assert "| Первая ошибка по распознанному (G2, цель ≥ 80 %) | 2/2 = 100% |" in md
+    assert "| Помечено «требует проверки» | 1 строк, из них действительно ошибочны 1 |" in md
+    assert "| Фото распознано | 1 |" in md and "Калибровка" in md
+    assert "пропущено черновиков: 1" in capsys.readouterr().out
+
+
+def test_evaluate_old_labels_format_without_problem_column(tmp_path, monkeypatch):
+    labels = tmp_path / "labels.csv"
+    labels.write_text("photo,kind,statement,lines,error_line,error_tag\n,equation,x² = 5x,x = 5 | Ответ: 5,1,lost_root\n",
+                      encoding="utf-8")
+    monkeypatch.setattr("sys.argv", ["evaluate.py", "--labels", str(labels)])
+    evaluate.main()
+
+
+def test_evaluate_draft_appends_row(monkeypatch, tmp_path):
+    reply = json.dumps({"problems": [{"number": 1, "lines": [{"text": "x = 5", "unsure": []},
+                                                             {"text": "Ответ: 5", "unsure": []}]}]}, ensure_ascii=False)
+    _eval_env(monkeypatch, tmp_path, reply)
+    labels = tmp_path / "labels.csv"
+    labels.write_text("photo,kind,statement,lines,error_line,error_tag\n,equation,x = 1,x = 1,0,\n", encoding="utf-8")
+    monkeypatch.setattr("sys.argv", ["evaluate.py", "--labels", str(labels), "--draft", str(tmp_path / "p.jpg"),
+                                     "--statement", "x² = 5x"])
+    evaluate.main()
+    rows, fields = evaluate.read_labels(labels)
+    assert fields[:6] == ["photo", "kind", "statement", "lines", "error_line", "error_tag"]
+    assert "problem" in fields and "status" in fields
+    assert rows[0]["statement"] == "x = 1" and rows[0]["status"] == ""
+    assert rows[1] == {**rows[1], "photo": "p.jpg", "problem": "1", "lines": "x = 5 | Ответ: 5",
+                       "error_line": "1", "error_tag": "lost_root", "status": "draft"}
+
+
+def test_synthetic_set_is_labelled_synthetic():
+    from pathlib import Path
+    folder = Path(evaluate.__file__).parent / "eval" / "synthetic"
+    rows, _ = evaluate.read_labels(folder / "labels.csv")
+    assert len({r["photo"] for r in rows}) >= 30
+    assert all(r["status"] == "synthetic" and (folder.parent / r["photo"]).exists() for r in rows)
+    assert json.loads((folder / "manifest.json").read_text(encoding="utf-8"))["synthetic"] is True
