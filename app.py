@@ -754,11 +754,17 @@ def page_check():
         st.caption(L("Фото не сохраняется: после распознавания в базе остаются только строки текста.",
                      "Фото сақталмайды: танылғаннан кейін базада тек мәтін жолдары қалады."))
     with tab_text:
-        if aid == live_aid and st.button(L("Вставить демо-работу (Айгерим, ДЗ №7)", "Демо-жұмысты қою (Айгерим, ҮТ №7)")):
+        number = next(a["number"] for a in asg if a["id"] == aid)
+        demo = seed.LIVE_DEMO_TEXT if aid == live_aid else seed.EXTRA_DEMO_TEXT.get(number)
+        # демо-ученица — по псевдониму в синтетическом классе: id меняются после удаления и импорта
+        demo_sid = next((s["id"] for s in studs if s["alias"] == seed.STUDENTS[0] and s["class_name"] == seed.CLASS_NAME), None)
+        who = f"{seed.STUDENTS[0]}, " if demo_sid is not None else ""
+        if demo and st.button(L(f"Вставить демо-работу ({who}ДЗ №{number})", f"Демо-жұмысты қою ({who}ҮТ №{number})")):
             for p in probs:
-                ss[f"lines_{aid}_{p['id']}"] = seed.LIVE_DEMO_TEXT.get(p["idx"], "")
-            ss["set_chk_student"] = 1 if 1 in alias else sid
-            ss["comment_prefill"] = seed.LIVE_DEMO_COMMENT
+                ss[f"lines_{aid}_{p['id']}"] = demo.get(p["idx"], "")
+            ss["set_chk_student"] = demo_sid if demo_sid is not None else sid
+            if aid == live_aid:
+                ss["comment_prefill"] = seed.LIVE_DEMO_COMMENT
             st.rerun()
         for p in probs:
             st.text_area(f"№{p['idx']}. {p['statement']}  ·  {T.skill_name(p['skill'], lang)}",

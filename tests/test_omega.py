@@ -431,3 +431,39 @@ def test_line_kinds_of_new_topics_have_labels():
         seen |= {lr.kind for lr in check_problem(kind, st, lines, None, None).lines}
     assert {"ineq", "signs", "interval", "subst", "system", "point"} <= seen
     assert seen - service <= set(T.LINE_KINDS)
+
+
+# ---------------------------------------------------------------- O10. демо-работа для ДЗ №8
+
+def _hw(conn, number: int) -> int:
+    return db.q1(conn, "SELECT id FROM assignments WHERE number=?", (number,))["id"]
+
+
+def test_extra_demo_text_hw8(conn):
+    aid = _hw(conn, 8)
+    probs = {p["idx"]: p["id"] for p in pipeline.problems_of(conn, aid)}
+    res = pipeline.run_checks(conn, aid, {pid: seed.EXTRA_DEMO_TEXT[8][i].splitlines() for i, pid in probs.items()})
+    fe1 = res[probs[1]].first_error
+    assert (fe1["line"], fe1["tag"]) == (3, "ineq_flip")
+    assert res[probs[2]].first_error is None and res[probs[2]].correct and "interval_method" in res[probs[2]].methods
+    fe3 = res[probs[3]].first_error
+    assert (fe3["line"], fe3["tag"], fe3["detail"].get("domain")) == (2, "boundary", ["−1"])
+
+
+def test_demo_button_hw8_finds_aigerim_by_alias(app_db):
+    from core import privacy
+    old = _aigerim(app_db)
+    privacy.delete_student(app_db, old)  # id 1 больше не Айгерим: ищем по псевдониму, а не по id
+    new = app_db.execute("INSERT INTO students (alias, class_name) VALUES (?,?)", (seed.STUDENTS[0], seed.CLASS_NAME)).lastrowid
+    app_db.commit()
+    assert new != old
+    teacher = auth.get_user_by_login(app_db, auth.DEMO_TEACHER)
+    other = db.q1(app_db, "SELECT id FROM students WHERE alias=?", (seed.STUDENTS[1],))["id"]
+    at = run_app("check", teacher, chk_asg=_hw(app_db, 8), chk_student=other)
+    click(at, "Вставить демо-работу")
+    assert at.session_state["chk_student"] == new
+    click(at, "Проверить")
+    text = _texts(at)
+    assert "ошибка в строке 3" in text
+    for label in ("неравенство", "знаки"):  # O9: подписи видов строк справа
+        assert label in text
